@@ -1,1 +1,8 @@
-python-3.10.13
+[phases.setup]
+nixPkgs = ["python310", "opus", "libffi", "gcc"]
+
+[phases.build]
+cmds = ["pip install --no-cache-dir -r requirements.txt"]
+
+[start]
+cmd = "python main.py"
