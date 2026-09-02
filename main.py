@@ -205,50 +205,25 @@ class TicketSelectView(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(TicketSelect(reasons_list, open_category_id, closed_category_id))
 
-class RenameApprovalView(discord.ui.View):
-    def __init__(self, member: discord.Member, new_nickname: str):
+# --- VERIFY SYSTEM VIEW ---
+class VerifyButtonView(discord.ui.View):
+    def __init__(self, role_id: int):
         super().__init__(timeout=None)
-        self.member = member
-        self.new_nickname = new_nickname
+        self.role_id = role_id
 
-    @discord.ui.button(label="Accept", style=discord.ButtonStyle.green, custom_id="rename_accept_btn", emoji="✅")
-    async def accept_rename(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_nicknames:
-            await interaction.response.send_message("You do not have permission to use this button!", ephemeral=True)
-            return
-            
+    @discord.ui.button(label="Verify", style=discord.ButtonStyle.green, custom_id="persistent_verify_btn", emoji="✅")
+    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(thinking=True, ephemeral=True)
-        try:
-            await self.member.edit(nick=self.new_nickname)
-            for child in self.children:
-                child.disabled = True
-            await interaction.message.edit(view=self)
-            await interaction.followup.send(f"Nickname change approved for {self.member.mention}! ✅", ephemeral=True)
-            try:
-                await self.member.send(f"Your request to change your nickname to **{self.new_nickname}** has been **Accepted**! 🎉")
-            except:
-                pass
-        except Exception as e:
-            await interaction.followup.send(f"Error applying nickname: {e}", ephemeral=True)
-
-    @discord.ui.button(label="Reject", style=discord.ButtonStyle.red, custom_id="rename_reject_btn", emoji="❌")
-    async def reject_rename(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.manage_nicknames:
-            await interaction.response.send_message("You do not have permission to use this button!", ephemeral=True)
+        guild = interaction.guild
+        role = guild.get_role(self.role_id)
+        if not role:
+            await interaction.followup.send("❌ Verification role not found!", ephemeral=True)
             return
-
-        await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            for child in self.children:
-                child.disabled = True
-            await interaction.message.edit(view=self)
-            await interaction.followup.send(f"Nickname change rejected for {self.member.mention}. ❌", ephemeral=True)
-            try:
-                await self.member.send(f"Your request to change your nickname to **{self.new_nickname}** has been **Rejected**.")
-            except:
-                pass
+            await interaction.user.add_roles(role, reason="User verified via button.")
+            await interaction.followup.send("✅ You have been successfully verified!", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"Error: {e}", ephemeral=True)
+            await interaction.followup.send(f"❌ Failed to assign role: {e}", ephemeral=True)
 
 # --- PERSISTENT BOT CLASS ---
 
@@ -395,6 +370,34 @@ async def addblacklistserver(interaction: discord.Interaction, server_id: str):
         await interaction.response.send_message(f"✅ Server `{server_id}` added to blacklist.", ephemeral=True)
     else:
         await interaction.response.send_message(f"⚠️ Server is already blacklisted.", ephemeral=True)
+
+# ==================== Restored Old Commands (/sendhere, /createverify, etc.) ====================
+
+@bot.tree.command(name="sendhere", description="Send the ticket selection menu in the current channel")
+@app_commands.checks.has_permissions(administrator=True)
+async def sendhere(interaction: discord.Interaction):
+    view = TicketSelectView(GLOBAL_TICKET_REASONS)
+    embed = discord.Embed(
+        title="Support Tickets",
+        description="Select an option from the dropdown menu below to open a support ticket.",
+        color=0x5865F2
+    )
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message("✅ Ticket panel sent successfully to this channel!", ephemeral=True)
+
+@bot.tree.command(name="createverify", description="Create a verification panel with a button in the current channel")
+@app_commands.describe(role="The role to assign upon verification")
+@app_commands.checks.has_permissions(administrator=True)
+async def createverify(interaction: discord.Interaction, role: discord.Role):
+    view = VerifyButtonView(role.id)
+    bot.add_view(view)
+    embed = discord.Embed(
+        title="Server Verification",
+        description="Click the verify button below to get access to the server!",
+        color=0x00FF00
+    )
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message(f"✅ Verification panel created successfully for role {role.mention}!", ephemeral=True)
 
 # ==================== Voice Channel Commands ====================
 
