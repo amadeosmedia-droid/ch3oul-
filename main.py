@@ -341,7 +341,7 @@ async def on_message(message):
 
 # --- ALL COMMANDS ---
 
-@bot.tree.command(name="setpunishment", description="تعيين العقوبة للإجراءات الأمنية مع إمكانية تحديد قناة معينة.")
+@bot.tree.command(name="setpunishment", description="Set the punishment for security actions with an optional specific channel.")
 @commands.has_permissions(administrator=True)
 async def setpunishment(interaction: discord.Interaction, punishment: str, channel: discord.TextChannel = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -350,7 +350,7 @@ async def setpunishment(interaction: discord.Interaction, punishment: str, chann
     PUNISHMENT_CHANNEL_ID = channel.id if channel else 0
     await interaction.followup.send(f"Successfully updated punishment to **{PUNISHMENT_SETTING}**! ✅", ephemeral=True)
 
-@bot.tree.command(name="setlogssecurity", description="تعيين قناة سجلات الأمان (Logs).")
+@bot.tree.command(name="setlogssecurity", description="Set the security logs channel.")
 @commands.has_permissions(administrator=True)
 async def setlogssecurity(interaction: discord.Interaction, channel: discord.TextChannel):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -358,7 +358,7 @@ async def setlogssecurity(interaction: discord.Interaction, channel: discord.Tex
     SECURITY_LOGS_CHANNEL_ID = channel.id
     await interaction.followup.send(f"Security logs channel set to {channel.mention}! ✅", ephemeral=True)
 
-@bot.tree.command(name="antinuke", description="تفعيل أو تعطيل نظام الحماية من التخريب (Antinuke).")
+@bot.tree.command(name="antinuke", description="Enable or disable the antinuke protection system.")
 @commands.has_permissions(administrator=True)
 async def antinuke(interaction: discord.Interaction, status: bool):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -367,7 +367,7 @@ async def antinuke(interaction: discord.Interaction, status: bool):
     state = "Enabled" if status else "Disabled"
     await interaction.followup.send(f"Antinuke system is now **{state}**! ✅", ephemeral=True)
 
-@bot.tree.command(name="antiraid", description="تفعيل أو تعطيل نظام الحماية من الرايد (Anti-Raid).")
+@bot.tree.command(name="antiraid", description="Enable or disable the anti-raid protection system.")
 @commands.has_permissions(administrator=True)
 async def antiraid(interaction: discord.Interaction, status: bool):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -376,7 +376,7 @@ async def antiraid(interaction: discord.Interaction, status: bool):
     state = "Enabled" if status else "Disabled"
     await interaction.followup.send(f"Anti-Raid system is now **{state}**! ✅", ephemeral=True)
 
-@bot.tree.command(name="rudewordadd", description="إضافة كلمة سيئة لفلتر الشات مع رسالة رد تلقائية وحذف الرسالة.")
+@bot.tree.command(name="rudewordadd", description="Add a bad word to the chat filter with an auto-reply message and message deletion.")
 @commands.has_permissions(administrator=True)
 async def rudewordadd(interaction: discord.Interaction, word: str, reply_message: str = ""):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -384,7 +384,7 @@ async def rudewordadd(interaction: discord.Interaction, word: str, reply_message
     BAD_WORDS_FILTER[word.lower()] = reply_message
     await interaction.followup.send(f"Bad word `{word}` added to filter successfully! ✅", ephemeral=True)
 
-@bot.tree.command(name="addblacklistserver", description="إضافة معرف سيرفر (Server ID) للقائمة السوداء لمنع الأعضاء.")
+@bot.tree.command(name="addblacklistserver", description="Add a Server ID to the blacklist to block members.")
 @commands.has_permissions(administrator=True)
 async def addblacklistserver(interaction: discord.Interaction, server_id: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -399,7 +399,7 @@ async def addblacklistserver(interaction: discord.Interaction, server_id: str):
     except ValueError:
         await interaction.followup.send("Invalid Server ID format!", ephemeral=True)
 
-@bot.tree.command(name="joinvc", description="جعل البوت ينضم لقناة صوتية عبر معرف القناة (ID).")
+@bot.tree.command(name="joinvc", description="Make the bot join a voice channel via channel ID.")
 @commands.has_permissions(administrator=True)
 async def joinvc(interaction: discord.Interaction, channel_id: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -416,7 +416,7 @@ async def joinvc(interaction: discord.Interaction, channel_id: str):
     except Exception as e:
         await interaction.followup.send(f"Voice connection error: {e}", ephemeral=True)
 
-@bot.tree.command(name="leavevc", description="جعل البوت يغادر القناة الصوتية الحالية.")
+@bot.tree.command(name="leavevc", description="Make the bot leave the current voice channel.")
 @commands.has_permissions(administrator=True)
 async def leavevc(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -426,7 +426,7 @@ async def leavevc(interaction: discord.Interaction):
     else:
         await interaction.followup.send("I am not in any voice channel!", ephemeral=True)
 
-@bot.tree.command(name="voiceinfo", description="إظهار معلومات الاتصال الصوتي الحالي.")
+@bot.tree.command(name="voiceinfo", description="Show current voice connection information.")
 async def voiceinfo(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
     if interaction.guild.voice_client and interaction.guild.voice_client.channel:
@@ -435,7 +435,7 @@ async def voiceinfo(interaction: discord.Interaction):
     else:
         await interaction.followup.send("I am not currently connected to any voice channel.", ephemeral=True)
 
-@bot.tree.command(name="warn", description="تحذير عضو مع ذكر السبب.")
+@bot.tree.command(name="warn", description="Warn a member with a specified reason.")
 @commands.has_permissions(manage_messages=True)
 async def warn(interaction: discord.Interaction, member: discord.Member, reason: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -445,19 +445,19 @@ async def warn(interaction: discord.Interaction, member: discord.Member, reason:
         pass
     await interaction.followup.send(f"Successfully warned {member.mention} for: {reason} ✅", ephemeral=True)
 
-@bot.tree.command(name="check_warns", description="عرض التحذيرات المسجلة على عضو معين.")
+@bot.tree.command(name="check_warns", description="View recorded warnings for a specific member.")
 @commands.has_permissions(manage_messages=True)
 async def check_warns(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.defer(thinking=True, ephemeral=True)
     await interaction.followup.send(f"Checking warnings for {member.mention}... (Feature initialized)", ephemeral=True)
 
-@bot.tree.command(name="clear_warns", description="مسح جميع التحذيرات عن عضو معين.")
+@bot.tree.command(name="clear_warns", description="Clear all warnings for a specific member.")
 @commands.has_permissions(manage_messages=True)
 async def clear_warns(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.defer(thinking=True, ephemeral=True)
     await interaction.followup.send(f"Successfully cleared warnings for {member.mention}! ✅", ephemeral=True)
 
-@bot.tree.command(name="mute", description="إسكات (Timeout) عضو لمدة زمنية محددة.")
+@bot.tree.command(name="mute", description="Timeout a member for a specified duration in minutes.")
 @commands.has_permissions(moderate_members=True)
 async def mute(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str = "No reason provided"):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -468,7 +468,7 @@ async def mute(interaction: discord.Interaction, member: discord.Member, minutes
     except Exception as e:
         await interaction.followup.send(f"Error muting member: {e}", ephemeral=True)
 
-@bot.tree.command(name="unmute", description="إزالة الإسكات (Timeout) عن عضو أو كتابة all لإزالة الإسكات عن جميع المكتومين.")
+@bot.tree.command(name="unmute", description="Remove timeout from a member or type 'all' to unmute all timed-out members.")
 @commands.has_permissions(moderate_members=True)
 async def unmute(interaction: discord.Interaction, target: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -501,7 +501,7 @@ async def unmute(interaction: discord.Interaction, target: str):
     except Exception as e:
         await interaction.followup.send(f"Error unmuting: {e}", ephemeral=True)
 
-@bot.tree.command(name="untimeout", description="إزالة الإسكات عن عضو أو كتابة all لإزالة الإسكات عن الجميع.")
+@bot.tree.command(name="untimeout", description="Remove timeout from a member or type 'all' to clear timeouts for everyone.")
 @commands.has_permissions(moderate_members=True)
 async def untimeout(interaction: discord.Interaction, target: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -534,7 +534,7 @@ async def untimeout(interaction: discord.Interaction, target: str):
     except Exception as e:
         await interaction.followup.send(f"Error removing timeout: {e}", ephemeral=True)
 
-@bot.tree.command(name="kick", description="طرد عضو من السيرفر.")
+@bot.tree.command(name="kick", description="Kick a member from the server.")
 @commands.has_permissions(kick_members=True)
 async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -544,7 +544,7 @@ async def kick(interaction: discord.Interaction, member: discord.Member, reason:
     except Exception as e:
         await interaction.followup.send(f"Error kicking member: {e}", ephemeral=True)
 
-@bot.tree.command(name="ban", description="حظر عضو من السيرفر.")
+@bot.tree.command(name="ban", description="Ban a member from the server.")
 @commands.has_permissions(ban_members=True)
 async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -554,7 +554,7 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
     except Exception as e:
         await interaction.followup.send(f"Error banning member: {e}", ephemeral=True)
 
-@bot.tree.command(name="unban", description="إلغاء حظر عضو بالاسم أو كتابة all لإلغاء حظر جميع المحظورين دفعة واحدة.")
+@bot.tree.command(name="unban", description="Unban a member by name or type 'all' to unban all banned members at once.")
 @commands.has_permissions(ban_members=True)
 async def unban(interaction: discord.Interaction, target: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -580,7 +580,7 @@ async def unban(interaction: discord.Interaction, target: str):
     except Exception as e:
         await interaction.followup.send(f"Error unbanning: {e}", ephemeral=True)
 
-@bot.tree.command(name="purge", description="مسح وحذف عدد محدد من الرسائل في الشات.")
+@bot.tree.command(name="purge", description="Bulk delete a specified number of messages in the chat.")
 @commands.has_permissions(manage_messages=True)
 async def purge(interaction: discord.Interaction, amount: int):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -590,7 +590,7 @@ async def purge(interaction: discord.Interaction, amount: int):
     except Exception as e:
         await interaction.followup.send(f"Error purging messages: {e}", ephemeral=True)
 
-@bot.tree.command(name="stats", description="عرض إحصائيات السيرفر والبوت العامة.")
+@bot.tree.command(name="stats", description="Display general server and bot statistics.")
 async def stats(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True, ephemeral=True)
     guild = interaction.guild
@@ -675,7 +675,6 @@ async def senddm(
                 continue
             try:
                 if files_to_send:
-                    # Recreate file objects for each user since they close upon sending
                     user_files = [await att.to_file() for att in attachments if att]
                     await member.send(content=message, files=user_files)
                 else:
