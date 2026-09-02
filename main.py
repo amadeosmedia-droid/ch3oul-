@@ -1,4 +1,5 @@
 import asyncio
+import os
 import discord
 from discord.ext import commands
 
@@ -483,7 +484,6 @@ async def unmute(interaction: discord.Interaction, target: str):
                         pass
             await interaction.followup.send(f"Successfully removed timeout from all ({count}) members! ✅", ephemeral=True)
         else:
-            # Try to resolve target as a member mention or id/name
             member = None
             if target.startswith("<@") and target.endswith(">"):
                 member_id = int(target.strip("<@!>"))
@@ -662,308 +662,31 @@ async def senddm(
     await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         attachments = [file1, file2, file3, file4, file5, file6, file7, file8, file9, file10, file11, file12]
-        final_message = message
+        files_to_send = []
+        for att in attachments:
+            if att:
+                file_obj = await att.to_file()
+                files_to_send.append(file_obj)
+
         success_count = 0
         fail_count = 0
-
         for member in interaction.guild.members:
             if member.bot:
                 continue
             try:
-                if any(attachments):
-                    fresh_files = [await f.to_file() for f in attachments if f]
-                    await member.send(content=final_message, files=fresh_files)
+                if files_to_send:
+                    # Recreate file objects for each user since they close upon sending
+                    user_files = [await att.to_file() for att in attachments if att]
+                    await member.send(content=message, files=user_files)
                 else:
-                    await member.send(content=final_message)
+                    await member.send(content=message)
                 success_count += 1
             except Exception:
                 fail_count += 1
 
-        await interaction.followup.send(f"Completed! Success: {success_count} | Failed: {fail_count} ✅", ephemeral=True)
+        await interaction.followup.send(f"Broadcast completed! Success: {success_count}, Failed: {fail_count} ✅", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"General error: {e}", ephemeral=True)
+        await interaction.followup.send(f"Error sending DMs: {e}", ephemeral=True)
 
-@bot.tree.command(name="clear", description="Delete a specific number of messages in this channel.")
-@commands.has_permissions(manage_messages=True)
-async def clear(interaction: discord.Interaction, amount: int):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        deleted = await interaction.channel.purge(limit=amount)
-        await interaction.followup.send(f"Successfully deleted {len(deleted)} messages! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error clearing messages: {e}", ephemeral=True)
-
-@bot.tree.command(name="status", description="Change the bot's activity status.")
-@commands.has_permissions(administrator=True)
-async def status(interaction: discord.Interaction, activity_type: str, text: str):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        act_type = activity_type.lower()
-        if act_type == "playing":
-            activity = discord.Game(name=text)
-        elif act_type == "streaming":
-            activity = discord.Streaming(name=text, url="https://www.twitch.tv/discord")
-        elif act_type == "listening":
-            activity = discord.Activity(type=discord.ActivityType.listening, name=text)
-        elif act_type == "watching":
-            activity = discord.Activity(type=discord.ActivityType.watching, name=text)
-        else:
-            await interaction.followup.send("Invalid type!", ephemeral=True)
-            return
-
-        await bot.change_presence(activity=activity)
-        await interaction.followup.send(f"Status updated successfully! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
-
-@bot.tree.command(name="embed", description="Send a professional custom embed message with an optional image from your device.")
-@commands.has_permissions(administrator=True)
-async def embed(interaction: discord.Interaction, title: str, description: str, color_hex: str = "00ffcc", image_file: discord.Attachment = None):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        color_int = int(color_hex.replace("#", ""), 16)
-        embed_msg = discord.Embed(title=title, description=description, color=color_int)
-        
-        if image_file:
-            attachment_file = await image_file.to_file()
-            embed_msg.set_image(url=f"attachment://{image_file.filename}")
-            await interaction.channel.send(embed=embed_msg, file=attachment_file)
-        else:
-            await interaction.channel.send(embed=embed_msg)
-            
-        await interaction.followup.send("Embed sent successfully! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
-
-@bot.tree.command(name="createverify", description="Create a professional verify message with button or emoji and a custom image/video.")
-@commands.has_permissions(administrator=True)
-async def createverify(
-    interaction: discord.Interaction, 
-    title: str, 
-    description: str, 
-    verify_role: discord.Role,
-    method: str, 
-    color_hex: str = "00ff00",
-    image_file: discord.Attachment = None,
-    button_name: str = "Verify",
-    button_color: str = "green", 
-    emoji: str = "✅"
-):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        color_int = int(color_hex.replace("#", ""), 16)
-        embed_msg = discord.Embed(title=title, description=description, color=color_int)
-        
-        attachment_file = None
-        if image_file:
-            attachment_file = await image_file.to_file()
-            embed_msg.set_image(url=f"attachment://{image_file.filename}")
-
-        selected_method = method.lower().strip()
-
-        if selected_method == "button":
-            style_map = {
-                "green": discord.ButtonStyle.green,
-                "blurple": discord.ButtonStyle.blurple,
-                "grey": discord.ButtonStyle.grey,
-                "red": discord.ButtonStyle.red
-            }
-            b_style = style_map.get(button_color.lower(), discord.ButtonStyle.green)
-
-            class DynamicVerifyView(discord.ui.View):
-                def __init__(self, role_id: int):
-                    super().__init__(timeout=None)
-                    self.role_id = role_id
-                    
-                    btn = discord.ui.Button(label=button_name, style=b_style, custom_id=f"verify_btn_{role_id}")
-                    btn.callback = self.button_callback
-                    self.add_item(btn)
-
-                async def button_callback(self, inter: discord.Interaction):
-                    await inter.response.defer(thinking=True, ephemeral=True)
-                    
-                    guild = inter.guild
-                    role = guild.get_role(self.role_id)
-                    if not role:
-                        await inter.followup.send("Verification role not found!", ephemeral=True)
-                        return
-                    
-                    if role in inter.user.roles:
-                        await inter.followup.send("You are already verified!", ephemeral=True)
-                    else:
-                        try:
-                            await inter.user.add_roles(role)
-                            await inter.followup.send("Successfully verified! ✅", ephemeral=True)
-                        except Exception as e:
-                            await inter.followup.send(f"Failed to assign role: {e}", ephemeral=True)
-
-            view = DynamicVerifyView(verify_role.id)
-
-            if attachment_file:
-                await interaction.channel.send(embed=embed_msg, file=attachment_file, view=view)
-            else:
-                await interaction.channel.send(embed=embed_msg, view=view)
-
-        elif selected_method == "emoji":
-            if attachment_file:
-                sent_msg = await interaction.channel.send(embed=embed_msg, file=attachment_file)
-            else:
-                sent_msg = await interaction.channel.send(embed=embed_msg)
-            
-            await sent_msg.add_reaction(emoji)
-
-            global VERIFY_EMOJI_DATA
-            if 'VERIFY_EMOJI_DATA' not in globals():
-                VERIFY_EMOJI_DATA = {}
-            VERIFY_EMOJI_DATA[sent_msg.id] = verify_role.id
-
-        else:
-            await interaction.followup.send("Invalid method! Please choose either 'button' or 'emoji'.", ephemeral=True)
-            return
-
-        await interaction.followup.send("Verify panel created successfully! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error creating verify panel: {e}", ephemeral=True)
-
-@bot.event
-async def on_raw_reaction_add(payload):
-    if payload.member and payload.member.bot:
-        return
-    
-    global VERIFY_EMOJI_DATA
-    if 'VERIFY_EMOJI_DATA' in globals() and payload.message_id in VERIFY_EMOJI_DATA:
-        role_id = VERIFY_EMOJI_DATA[payload.message_id]
-        guild = bot.get_guild(payload.guild_id)
-        if guild:
-            role = guild.get_role(role_id)
-            member = guild.get_member(payload.user_id)
-            if role and member and role not in member.roles:
-                try:
-                    await member.add_roles(role)
-                except Exception as e:
-                    print(f"Error adding emoji verify role: {e}")
-
-@bot.tree.command(name="changename", description="Change the nickname of a server member.")
-@commands.has_permissions(manage_nicknames=True)
-async def changename(interaction: discord.Interaction, member: discord.Member, new_name: str):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        await member.edit(nick=new_name)
-        await interaction.followup.send(f"Successfully changed nickname! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
-
-@bot.tree.command(name="createrenameroom", description="Create a channel named request-rename to let members request a new nickname.")
-@commands.has_permissions(administrator=True)
-async def createrenameroom(interaction: discord.Interaction):
-    global RENAME_REQUEST_CHANNEL_ID
-    try:
-        guild = interaction.guild
-        existing_channel = discord.utils.get(guild.text_channels, name="request-rename")
-        
-        if existing_channel:
-            RENAME_REQUEST_CHANNEL_ID = existing_channel.id
-            await interaction.response.send_message(f"The rename request channel already exists: {existing_channel.mention} ✅", ephemeral=True)
-            return
-
-        channel = await guild.create_text_channel("request-rename")
-        RENAME_REQUEST_CHANNEL_ID = channel.id
-        
-        await channel.send("📝 **Welcome to the Rename Request Channel!**\nType your desired nickname here, and staff will review and approve/reject it!")
-        await interaction.response.send_message(f"Successfully created channel {channel.mention}! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"Error creating rename channel: {e}", ephemeral=True)
-
-@bot.tree.command(name="autotagreact", description="Set target user and emoji for auto-reacting when tagged.")
-@commands.has_permissions(administrator=True)
-async def autotagreact(interaction: discord.Interaction, user: discord.Member, emoji: str):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    global TARGET_USER_ID, TARGET_EMOJI
-    try:
-        TARGET_USER_ID = user.id
-        TARGET_EMOJI = emoji
-        await interaction.followup.send(f"Success! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
-
-@bot.tree.command(name="createchrolecolor", description="Create a channel named color-role to manage custom color roles.")
-@commands.has_permissions(administrator=True)
-async def createchrolecolor(interaction: discord.Interaction):
-    global COLOR_CHANNEL_ID
-    try:
-        guild = interaction.guild
-        existing_channel = discord.utils.get(guild.text_channels, name="color-role")
-        
-        if existing_channel:
-            COLOR_CHANNEL_ID = existing_channel.id
-            await interaction.response.send_message(f"The color role channel already exists: {existing_channel.mention} ✅", ephemeral=True)
-            return
-
-        channel = await guild.create_text_channel("color-role")
-        COLOR_CHANNEL_ID = channel.id
-        
-        await channel.send("🎨 **Welcome to the Color Role Channel!**\nYou can now select your color role!")
-        await interaction.response.send_message(f"Successfully created channel {channel.mention}! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"Error creating color channel: {e}", ephemeral=True)
-
-# --- TICKET REASONS MANAGEMENT COMMANDS ---
-
-@bot.tree.command(name="addreason", description="Add a new ticket reason. Format: reason:description")
-@commands.has_permissions(administrator=True)
-async def addreason(interaction: discord.Interaction, reason_text: str):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    global GLOBAL_TICKET_REASONS
-    if reason_text not in GLOBAL_TICKET_REASONS:
-        GLOBAL_TICKET_REASONS.append(reason_text)
-        await interaction.followup.send(f"Reason added successfully! Current reasons: `{', '.join(GLOBAL_TICKET_REASONS)}` ✅", ephemeral=True)
-    else:
-        await interaction.followup.send("This reason already exists!", ephemeral=True)
-
-@bot.tree.command(name="removereason", description="Remove an existing ticket reason by typing its exact name.")
-@commands.has_permissions(administrator=True)
-async def removereason(interaction: discord.Interaction, reason_name: str):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    global GLOBAL_TICKET_REASONS
-    removed = False
-    for item in list(GLOBAL_TICKET_REASONS):
-        name = item.split(":", 1)[0].strip()
-        if name.lower() == reason_name.lower():
-            GLOBAL_TICKET_REASONS.remove(item)
-            removed = True
-    
-    if removed:
-        await interaction.followup.send(f"Reason `{reason_name}` removed successfully! ✅", ephemeral=True)
-    else:
-        await interaction.followup.send(f"Reason `{reason_name}` not found in the list!", ephemeral=True)
-
-@bot.tree.command(name="editreason", description="Edit the description of an existing reason. Format: reason:new_description")
-@commands.has_permissions(administrator=True)
-async def editreason(interaction: discord.Interaction, update_text: str):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    global GLOBAL_TICKET_REASONS
-    if ":" not in update_text:
-        await interaction.followup.send("Invalid format! Use `reason:new_description`", ephemeral=True)
-        return
-    
-    target_name, new_desc = update_text.split(":", 1)
-    target_name = target_name.strip()
-    new_desc = new_desc.strip()
-    
-    updated = False
-    new_list = []
-    for item in GLOBAL_TICKET_REASONS:
-        name = item.split(":", 1)[0].strip()
-        if name.lower() == target_name.lower():
-            new_list.append(f"{name}:{new_desc}")
-            updated = True
-        else:
-            new_list.append(item)
-            
-    if updated:
-        GLOBAL_TICKET_REASONS = new_list
-        await interaction.followup.send(f"Reason `{target_name}` updated successfully! ✅", ephemeral=True)
-    else:
-        await interaction.followup.send(f"Reason `{target_name}` not found in the list!", ephemeral=True)
-
-bot.run(os.getenv("DISCORD_TOKEN"))
+if __name__ == "__main__":
+    bot.run(os.getenv("DISCORD_TOKEN"))
