@@ -966,4 +966,4 @@ async def editreason(interaction: discord.Interaction, update_text: str):
     else:
         await interaction.followup.send(f"Reason `{target_name}` not found in the list!", ephemeral=True)
 
-bot.run("YOUR_BOT_TOKEN_HERE")
+bot.run(os.getenv("DISCORD_TOKEN"))
