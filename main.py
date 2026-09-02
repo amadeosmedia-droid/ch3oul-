@@ -1,8 +1,27 @@
 import asyncio
 import os
+import threading
+from flask import Flask
 import discord
 from discord.ext import commands
 
+# --- FLASK WEB SERVER FOR RENDER PORT BINDING ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is alive and running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
+def keep_alive():
+    t = threading.Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
+# --- DISCORD BOT SETUP ---
 intents = discord.Intents.all()
 
 MEMBER_COUNT_CHANNEL_ID = 1544821289506574388  
@@ -649,43 +668,11 @@ async def react(interaction: discord.Interaction, message_id: str, emoji: str):
     except Exception as e:
         await interaction.followup.send(f"Error: {e}", ephemeral=True)
 
-@bot.tree.command(name="senddm", description="Send a direct message to all members in the server.")
-@commands.has_permissions(administrator=True)
-async def senddm(
-    interaction: discord.Interaction, 
-    message: str,
-    file1: discord.Attachment = None, file2: discord.Attachment = None, file3: discord.Attachment = None,
-    file4: discord.Attachment = None, file5: discord.Attachment = None, file6: discord.Attachment = None,
-    file7: discord.Attachment = None, file8: discord.Attachment = None, file9: discord.Attachment = None,
-    file10: discord.Attachment = None, file11: discord.Attachment = None, file12: discord.Attachment = None
-):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        attachments = [file1, file2, file3, file4, file5, file6, file7, file8, file9, file10, file11, file12]
-        files_to_send = []
-        for att in attachments:
-            if att:
-                file_obj = await att.to_file()
-                files_to_send.append(file_obj)
-
-        success_count = 0
-        fail_count = 0
-        for member in interaction.guild.members:
-            if member.bot:
-                continue
-            try:
-                if files_to_send:
-                    user_files = [await att.to_file() for att in attachments if att]
-                    await member.send(content=message, files=user_files)
-                else:
-                    await member.send(content=message)
-                success_count += 1
-            except Exception:
-                fail_count += 1
-
-        await interaction.followup.send(f"Broadcast completed! Success: {success_count}, Failed: {fail_count} ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error sending DMs: {e}", ephemeral=True)
-
+# --- STARTUP ---
 if __name__ == "__main__":
-    bot.run(os.getenv("DISCORD_TOKEN"))
+    keep_alive()
+    TOKEN = os.environ.get("DISCORD_TOKEN")
+    if TOKEN:
+        bot.run(TOKEN)
+    else:
+        print("Error: DISCORD_TOKEN environment variable is missing!")
