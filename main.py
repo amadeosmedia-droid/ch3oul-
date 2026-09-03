@@ -31,6 +31,10 @@ COLOR_CHANNEL_ID = 0
 RENAME_REQUEST_CHANNEL_ID = 0  
 SECURITY_LOGS_CHANNEL_ID = 0
 
+# Custom Welcome Message & Attachment Storage
+CUSTOM_WELCOME_TEXT = None
+CUSTOM_WELCOME_ATTACHMENT = None
+
 # Advanced Punishments Mapping: Action -> Punishment
 SECURITY_PUNISHMENTS = {
     "delete_message": "timeout",
@@ -217,12 +221,27 @@ async def on_member_join(member):
             pass
 
     try:
-        welcome_message = (
-            f"welcome {member.mention} to hell of tunisia server!\n"
-            f"invite your friends and enjoy\n"
-            f"https://discord.gg/WMWgkFuxA"
-        )
-        await member.send(welcome_message)
+        global CUSTOM_WELCOME_TEXT, CUSTOM_WELCOME_ATTACHMENT
+        if CUSTOM_WELCOME_TEXT:
+            welcome_message = CUSTOM_WELCOME_TEXT.replace("{user}", member.mention).replace("{server}", member.guild.name)
+        else:
+            welcome_message = (
+                f"welcome {member.mention} to hell of tunisia server!\n"
+                f"invite your friends and enjoy\n"
+                f"https://discord.gg/WMWgkFuxA"
+            )
+        
+        file_to_send = None
+        if CUSTOM_WELCOME_ATTACHMENT:
+            try:
+                file_to_send = await CUSTOM_WELCOME_ATTACHMENT.to_file()
+            except:
+                pass
+
+        if file_to_send:
+            await member.send(content=welcome_message, file=file_to_send)
+        else:
+            await member.send(welcome_message)
     except Exception as e:
         print(f"Could not send welcome DM to {member.name}: {e}")
     
@@ -375,7 +394,6 @@ async def on_message(message):
 
 # --- ALL COMMANDS ---
 
-# دالة مساعدة لتحويل الوقت من صيغ مثل 30s, 5m, 1h إلى ثوانٍ
 def parse_time(time_str: str) -> int:
     time_str = time_str.lower().strip()
     total_seconds = 0
@@ -419,7 +437,6 @@ async def automessage(
         await interaction.followup.send("Time interval must be at least 5 seconds (e.g. 5s, 1m, 1h) to prevent rate limits! ❌", ephemeral=True)
         return
 
-    # إذا كانت القناة تحتوي مسبقاً على رسالة تلقائية تعمل، قم بإيقافها أولاً
     if channel.id in AUTOMESSAGE_TASKS:
         AUTOMESSAGE_TASKS[channel.id].cancel()
 
@@ -473,6 +490,79 @@ async def stopautomessage(interaction: discord.Interaction, channel: discord.Tex
     else:
         await interaction.followup.send(f"No active automessage loop found in {channel.mention}.", ephemeral=True)
 
+@bot.tree.command(name="senddm", description="Send a direct message (DM) to all members of the server.")
+@commands.has_permissions(administrator=True)
+async def senddm(interaction: discord.Interaction, message: str, attachment: discord.Attachment = None):
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    guild = interaction.guild
+    
+    file_to_send = None
+    if attachment:
+        try:
+            file_to_send = await attachment.to_file()
+        except:
+            pass
+
+    success_count = 0
+    fail_count = 0
+
+    for member in guild.members:
+        if member.bot:
+            continue
+        try:
+            if file_to_send:
+                file_to_send.fp.seek(0)
+                await member.send(content=message, file=file_to_send)
+            else:
+                await member.send(content=message)
+            success_count += 1
+            await asyncio.sleep(0.5)
+        except:
+            fail_count += 1
+
+    await interaction.followup.send(f"DM Broadcast complete! Sent: {success_count}, Failed/Blocked: {fail_count} 📨", ephemeral=True)
+
+@bot.tree.command(name="setwelcomemessage", description="Set a custom welcome message and optional attachment sent via DM on join.")
+@commands.has_permissions(administrator=True)
+async def setwelcomemessage(interaction: discord.Interaction, message: str, attachment: discord.Attachment = None):
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    global CUSTOM_WELCOME_TEXT, CUSTOM_WELCOME_ATTACHMENT
+    CUSTOM_WELCOME_TEXT = message
+    CUSTOM_WELCOME_ATTACHMENT = attachment
+    await interaction.followup.send(f"Custom welcome DM message successfully updated! ✅\nMessage: `{message}`", ephemeral=True)
+
+@bot.tree.command(name="sendhere", description="Send a message with up to 14 optional files to the current channel.")
+@commands.has_permissions(manage_messages=True)
+async def sendhere(
+    interaction: discord.Interaction,
+    message: str = "",
+    file1: discord.Attachment = None, file2: discord.Attachment = None, file3: discord.Attachment = None,
+    file4: discord.Attachment = None, file5: discord.Attachment = None, file6: discord.Attachment = None,
+    file7: discord.Attachment = None, file8: discord.Attachment = None, file9: discord.Attachment = None,
+    file10: discord.Attachment = None, file11: discord.Attachment = None, file12: discord.Attachment = None,
+    file13: discord.Attachment = None, file14: discord.Attachment = None
+):
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    
+    attachments = [file1, file2, file3, file4, file5, file6, file7, file8, file9, file10, file11, file12, file13, file14]
+    valid_files = []
+    
+    for att in attachments:
+        if att is not None:
+            try:
+                valid_files.append(await att.to_file())
+            except Exception as e:
+                print(f"Error loading attachment: {e}")
+
+    try:
+        if valid_files or message:
+            await interaction.channel.send(content=message if message else None, files=valid_files if valid_files else None)
+            await interaction.followup.send("Message sent successfully! ✅", ephemeral=True)
+        else:
+            await interaction.followup.send("Please provide a message or at least one file to send.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Failed to send message: {e}", ephemeral=True)
+
 @bot.tree.command(name="embed", description="Send a customized embed message with optional color and image/gif.")
 @commands.has_permissions(administrator=True)
 async def embed(
@@ -487,7 +577,6 @@ async def embed(
     target_channel = channel if channel else interaction.channel
 
     try:
-        # معالجة اللون (سواء كان بصيغة Hex أو كود رقمي)
         cleaned_color = color.strip().replace("#", "")
         color_int = int(cleaned_color, 16)
     except ValueError:
@@ -762,7 +851,7 @@ async def unmute(interaction: discord.Interaction, target: str = "all"):
     except Exception as e:
         await interaction.followup.send(f"Error unmuting: {e}", ephemeral=True)
 
-@bot.tree.command(name="untimeout", description="Remove timeout from a member or type 'all'.")
+@bot.tree.command(name="untimeout", description="Remove timeout from all members or a specific user.")
 @commands.has_permissions(moderate_members=True)
 async def untimeout(interaction: discord.Interaction, target: str = "all"):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -815,7 +904,7 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
     except Exception as e:
         await interaction.followup.send(f"Error banning member: {e}", ephemeral=True)
 
-@bot.tree.command(name="unban", description="Unban a member by name or type 'all'.")
+@bot.tree.command(name="unban", description="Unban all members or a specific member by typing 'all' or their name/ID.")
 @commands.has_permissions(ban_members=True)
 async def unban(interaction: discord.Interaction, target: str = "all"):
     await interaction.response.defer(thinking=True, ephemeral=True)
