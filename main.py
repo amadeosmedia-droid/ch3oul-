@@ -30,11 +30,23 @@ TARGET_EMOJI = "👀"
 COLOR_CHANNEL_ID = 0
 RENAME_REQUEST_CHANNEL_ID = 0  
 SECURITY_LOGS_CHANNEL_ID = 0
-PUNISHMENT_SETTING = "kick"  # Default punishment
+
+# Advanced Punishments Mapping: Action -> Punishment
+SECURITY_PUNISHMENTS = {
+    "delete_message": "timeout",
+    "timeout": "timeout",
+    "ban": "ban",
+    "delete_channel": "kick",
+    "create_channel": "kick",
+    "delete_role": "kick",
+    "create_role": "kick",
+    "change_server_settings": "ban",
+    "kick_member": "kick"
+}
 PUNISHMENT_CHANNEL_ID = 0
 ANTINUKE_ENABLED = False
 ANTIRAID_ENABLED = False
-BAD_WORDS_FILTER = {}  # Format: {word: auto_reply_message}
+BAD_WORDS_FILTER = {}  
 SERVER_BLACKLIST = []
 
 GLOBAL_TICKET_REASONS = ["buy vip:Buy VIP role here", "support:General assistance"]
@@ -355,47 +367,122 @@ async def on_message(message):
         except Exception as e:
             print(f"Error adding reaction: {e}")
 
-    await bot.process_commands(message)
-
+    await bot.process_commands(message>
 
 # --- ALL COMMANDS ---
 
-@bot.tree.command(name="setpunishment", description="Set the punishment for security actions with an optional specific channel.")
+@bot.tree.command(name="setpunishment", description="Set punishment for security actions.")
 @commands.has_permissions(administrator=True)
-async def setpunishment(interaction: discord.Interaction, punishment: str, channel: discord.TextChannel = None):
+async def setpunishment(
+    interaction: discord.Interaction, 
+    action: discord.app_commands.Choice[str], 
+    punishment: discord.app_commands.Choice[str], 
+    channel: discord.TextChannel = None
+):
     await interaction.response.defer(thinking=True, ephemeral=True)
-    global PUNISHMENT_SETTING, PUNISHMENT_CHANNEL_ID
-    PUNISHMENT_SETTING = punishment.lower()
-    PUNISHMENT_CHANNEL_ID = channel.id if channel else 0
-    await interaction.followup.send(f"Successfully updated punishment to **{PUNISHMENT_SETTING}**! ✅", ephemeral=True)
+    global SECURITY_PUNISHMENTS, PUNISHMENT_CHANNEL_ID
+    SECURITY_PUNISHMENTS[action.value] = punishment.value
+    if channel:
+        PUNISHMENT_CHANNEL_ID = channel.id
+    await interaction.followup.send(f"Successfully set action **{action.name}** to punishment **{punishment.name}**! ✅", ephemeral=True)
+
+@setpunishment.autocomplete("action")
+async def setpunishment_action_autocomplete(interaction: discord.Interaction, current: str):
+    actions = [
+        "delete_message", "timeout", "ban", "delete_channel", 
+        "create_channel", "delete_role", "create_role", 
+        "change_server_settings", "kick_member"
+    ]
+    return [discord.app_commands.Choice(name=act.replace("_", " ").title(), value=act) for act in actions if current.lower() in act.lower()]
+
+@setpunishment.autocomplete("punishment")
+async def setpunishment_punishment_autocomplete(interaction: discord.Interaction, current: str):
+    punishments = ["kick", "ban", "timeout"]
+    return [discord.app_commands.Choice(name=p.capitalize(), value=p) for p in punishments if current.lower() in p.lower()]
+
+@bot.tree.command(name="status", description="Change or view the bot's presence status.")
+@commands.has_permissions(administrator=True)
+async def status(
+    interaction: discord.Interaction, 
+    activity_type: discord.app_commands.Choice[str] = None, 
+    status_type: discord.app_commands.Choice[str] = None, 
+    text: str = None
+):
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    try:
+        act_mapping = {
+            "playing": discord.ActivityType.playing,
+            "streaming": discord.ActivityType.streaming,
+            "listening": discord.ActivityType.listening,
+            "watching": discord.ActivityType.watching,
+            "competing": discord.ActivityType.competing
+        }
+        stat_mapping = {
+            "online": discord.Status.online,
+            "idle": discord.Status.idle,
+            "dnd": discord.Status.dnd,
+            "offline": discord.Status.offline
+        }
+        
+        current_activity = bot.activity
+        current_status = bot.status
+        
+        new_act = act_mapping.get(activity_type.value, current_activity.type) if activity_type else (current_activity.type if current_activity else discord.ActivityType.playing)
+        new_text = text if text else (current_activity.name if current_activity else "Active")
+        new_stat = stat_mapping.get(status_type.value, current_status) if status_type else current_status
+
+        await bot.change_presence(status=new_stat, activity=discord.Activity(type=new_act, name=new_text))
+        await interaction.followup.send("Bot status updated successfully! ✅", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Error updating status: {e}", ephemeral=True)
+
+@status.autocomplete("activity_type")
+async def status_activity_autocomplete(interaction: discord.Interaction, current: str):
+    acts = ["playing", "streaming", "listening", "watching", "competing"]
+    return [discord.app_commands.Choice(name=a.capitalize(), value=a) for a in acts if current.lower() in a.lower()]
+
+@status.autocomplete("status_type")
+async def status_type_autocomplete(interaction: discord.Interaction, current: str):
+    stats = ["online", "idle", "dnd", "offline"]
+    return [discord.app_commands.Choice(name=s.capitalize(), value=s) for s in stats if current.lower() in s.lower()]
 
 @bot.tree.command(name="setlogssecurity", description="Set the security logs channel.")
 @commands.has_permissions(administrator=True)
-async def setlogssecurity(interaction: discord.Interaction, channel: discord.TextChannel):
+async def setlogssecurity(interaction: discord.Interaction, channel: discord.TextChannel = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
     global SECURITY_LOGS_CHANNEL_ID
-    SECURITY_LOGS_CHANNEL_ID = channel.id
-    await interaction.followup.send(f"Security logs channel set to {channel.mention}! ✅", ephemeral=True)
+    if channel:
+        SECURITY_LOGS_CHANNEL_ID = channel.id
+        await interaction.followup.send(f"Security logs channel set to {channel.mention}! ✅", ephemeral=True)
+    else:
+        SECURITY_LOGS_CHANNEL_ID = 0
+        await interaction.followup.send("Security logs channel has been cleared/disabled! ❌", ephemeral=True)
 
 @bot.tree.command(name="antinuke", description="Enable or disable the antinuke protection system.")
 @commands.has_permissions(administrator=True)
-async def antinuke(interaction: discord.Interaction, status: bool):
+async def antinuke(interaction: discord.Interaction, status: bool = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
     global ANTINUKE_ENABLED
-    ANTINUKE_ENABLED = status
-    state = "Enabled" if status else "Disabled"
+    if status is not None:
+        ANTINUKE_ENABLED = status
+    else:
+        ANTINUKE_ENABLED = not ANTINUKE_ENABLED
+    state = "Enabled" if ANTINUKE_ENABLED else "Disabled"
     await interaction.followup.send(f"Antinuke system is now **{state}**! ✅", ephemeral=True)
 
 @bot.tree.command(name="antiraid", description="Enable or disable the anti-raid protection system.")
 @commands.has_permissions(administrator=True)
-async def antiraid(interaction: discord.Interaction, status: bool):
+async def antiraid(interaction: discord.Interaction, status: bool = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
     global ANTIRAID_ENABLED
-    ANTIRAID_ENABLED = status
-    state = "Enabled" if status else "Disabled"
+    if status is not None:
+        ANTIRAID_ENABLED = status
+    else:
+        ANTIRAID_ENABLED = not ANTIRAID_ENABLED
+    state = "Enabled" if ANTIRAID_ENABLED else "Disabled"
     await interaction.followup.send(f"Anti-Raid system is now **{state}**! ✅", ephemeral=True)
 
-@bot.tree.command(name="rudewordadd", description="Add a bad word to the chat filter with an auto-reply message and message deletion.")
+@bot.tree.command(name="rudewordadd", description="Add a bad word to the chat filter.")
 @commands.has_permissions(administrator=True)
 async def rudewordadd(interaction: discord.Interaction, word: str, reply_message: str = ""):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -403,7 +490,7 @@ async def rudewordadd(interaction: discord.Interaction, word: str, reply_message
     BAD_WORDS_FILTER[word.lower()] = reply_message
     await interaction.followup.send(f"Bad word `{word}` added to filter successfully! ✅", ephemeral=True)
 
-@bot.tree.command(name="addblacklistserver", description="Add a Server ID to the blacklist to block members.")
+@bot.tree.command(name="addblacklistserver", description="Add a Server ID to the blacklist.")
 @commands.has_permissions(administrator=True)
 async def addblacklistserver(interaction: discord.Interaction, server_id: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -418,12 +505,17 @@ async def addblacklistserver(interaction: discord.Interaction, server_id: str):
     except ValueError:
         await interaction.followup.send("Invalid Server ID format!", ephemeral=True)
 
-@bot.tree.command(name="joinvc", description="Make the bot join a voice channel via channel ID.")
+@bot.tree.command(name="joinvc", description="Make the bot join a voice channel.")
 @commands.has_permissions(administrator=True)
-async def joinvc(interaction: discord.Interaction, channel_id: str):
+async def joinvc(interaction: discord.Interaction, channel_id: str = None):
     await interaction.response.defer(thinking=True, ephemeral=True)
     try:
-        channel = bot.get_channel(int(channel_id))
+        channel = None
+        if channel_id:
+            channel = bot.get_channel(int(channel_id))
+        elif interaction.user.voice and interaction.user.voice.channel:
+            channel = interaction.user.voice.channel
+            
         if channel and isinstance(channel, discord.VoiceChannel):
             if interaction.guild.voice_client:
                 await interaction.guild.voice_client.move_to(channel)
@@ -431,7 +523,7 @@ async def joinvc(interaction: discord.Interaction, channel_id: str):
                 await channel.connect()
             await interaction.followup.send(f"Successfully joined voice channel: **{channel.name}**! 🔊", ephemeral=True)
         else:
-            await interaction.followup.send("Voice channel not found or invalid ID!", ephemeral=True)
+            await interaction.followup.send("Voice channel not found or you are not in one!", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"Voice connection error: {e}", ephemeral=True)
 
@@ -456,7 +548,7 @@ async def voiceinfo(interaction: discord.Interaction):
 
 @bot.tree.command(name="warn", description="Warn a member with a specified reason.")
 @commands.has_permissions(manage_messages=True)
-async def warn(interaction: discord.Interaction, member: discord.Member, reason: str):
+async def warn(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         await member.send(f"You have been warned in **{interaction.guild.name}** for: {reason}")
@@ -478,7 +570,7 @@ async def clear_warns(interaction: discord.Interaction, member: discord.Member):
 
 @bot.tree.command(name="mute", description="Timeout a member for a specified duration in minutes.")
 @commands.has_permissions(moderate_members=True)
-async def mute(interaction: discord.Interaction, member: discord.Member, minutes: int, reason: str = "No reason provided"):
+async def mute(interaction: discord.Interaction, member: discord.Member, minutes: int = 10, reason: str = "No reason provided"):
     await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         duration = discord.utils.utcnow() + discord.timedelta(minutes=minutes)
@@ -487,9 +579,9 @@ async def mute(interaction: discord.Interaction, member: discord.Member, minutes
     except Exception as e:
         await interaction.followup.send(f"Error muting member: {e}", ephemeral=True)
 
-@bot.tree.command(name="unmute", description="Remove timeout from a member or type 'all' to unmute all timed-out members.")
+@bot.tree.command(name="unmute", description="Remove timeout from a member or type 'all'.")
 @commands.has_permissions(moderate_members=True)
-async def unmute(interaction: discord.Interaction, target: str):
+async def unmute(interaction: discord.Interaction, target: str = "all"):
     await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         if target.lower() == "all":
@@ -520,9 +612,9 @@ async def unmute(interaction: discord.Interaction, target: str):
     except Exception as e:
         await interaction.followup.send(f"Error unmuting: {e}", ephemeral=True)
 
-@bot.tree.command(name="untimeout", description="Remove timeout from a member or type 'all' to clear timeouts for everyone.")
+@bot.tree.command(name="untimeout", description="Remove timeout from a member or type 'all'.")
 @commands.has_permissions(moderate_members=True)
-async def untimeout(interaction: discord.Interaction, target: str):
+async def untimeout(interaction: discord.Interaction, target: str = "all"):
     await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         if target.lower() == "all":
@@ -573,9 +665,9 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
     except Exception as e:
         await interaction.followup.send(f"Error banning member: {e}", ephemeral=True)
 
-@bot.tree.command(name="unban", description="Unban a member by name or type 'all' to unban all banned members at once.")
+@bot.tree.command(name="unban", description="Unban a member by name or type 'all'.")
 @commands.has_permissions(ban_members=True)
-async def unban(interaction: discord.Interaction, target: str):
+async def unban(interaction: discord.Interaction, target: str = "all"):
     await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         bans = [ban_entry async for ban_entry in interaction.guild.bans()]
@@ -599,9 +691,9 @@ async def unban(interaction: discord.Interaction, target: str):
     except Exception as e:
         await interaction.followup.send(f"Error unbanning: {e}", ephemeral=True)
 
-@bot.tree.command(name="purge", description="Bulk delete a specified number of messages in the chat.")
+@bot.tree.command(name="purge", description="Bulk delete messages in the chat.")
 @commands.has_permissions(manage_messages=True)
-async def purge(interaction: discord.Interaction, amount: int):
+async def purge(interaction: discord.Interaction, amount: int = 10):
     await interaction.response.defer(thinking=True, ephemeral=True)
     try:
         deleted = await interaction.channel.purge(limit=amount)
@@ -622,7 +714,7 @@ async def stats(interaction: discord.Interaction):
     embed.add_field(name="Total Guilds (Bot)", value=len(bot.guilds), inline=True)
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-@bot.tree.command(name="sendhere", description="Send a message and up to 12 files in the current channel.")
+@bot.tree.command(name="sendhere", description="Send a message and files in the current channel.")
 @commands.has_permissions(administrator=True)
 async def sendhere(
     interaction: discord.Interaction, 
@@ -657,7 +749,7 @@ async def sendhere(
     except Exception as e:
         await interaction.followup.send(f"An error occurred: {e}", ephemeral=True)
 
-@bot.tree.command(name="react", description="Add an emoji reaction to a specific message ID in this channel.")
+@bot.tree.command(name="react", description="Add an emoji reaction to a specific message ID.")
 @commands.has_permissions(administrator=True)
 async def react(interaction: discord.Interaction, message_id: str, emoji: str):
     await interaction.response.defer(thinking=True, ephemeral=True)
