@@ -52,7 +52,8 @@ SERVER_BLACKLIST = []
 GLOBAL_TICKET_REASONS = ["buy vip:Buy VIP role here", "support:General assistance"]
 VERIFY_EMOJI_DATA = {}
 
-# Global variable to track the last sent automatic message per channel
+# Global dictionaries to manage active automessage background tasks and last message tracking
+AUTOMESSAGE_TASKS = {}
 LAST_AUTOMESSAGE_ID = {}
 
 async def update_member_count_channel(guild):
@@ -374,23 +375,55 @@ async def on_message(message):
 
 # --- ALL COMMANDS ---
 
-@bot.tree.command(name="automessage", description="Send an automated repeating message with an optional attachment and time interval.")
+# دالة مساعدة لتحويل الوقت من صيغ مثل 30s, 5m, 1h إلى ثوانٍ
+def parse_time(time_str: str) -> int:
+    time_str = time_str.lower().strip()
+    total_seconds = 0
+    number_str = ""
+    
+    for char in time_str:
+        if char.isdigit():
+            number_str += char
+        else:
+            if not number_str:
+                continue
+            val = int(number_str)
+            if char == 's':
+                total_seconds += val
+            elif char == 'm':
+                total_seconds += val * 60
+            elif char == 'h':
+                total_seconds += val * 3600
+            elif char == 'd':
+                total_seconds += val * 86400
+            number_str = ""
+    
+    if number_str and total_seconds == 0:
+        total_seconds = int(number_str)
+        
+    return total_seconds
+
+@bot.tree.command(name="automessage", description="Send an automated repeating message in a channel with a time interval (e.g. 30s, 5m, 1h).")
 @commands.has_permissions(administrator=True)
 async def automessage(
     interaction: discord.Interaction, 
+    channel: discord.TextChannel,
     message: str, 
-    time: int, 
+    time: str, 
     attachment: discord.Attachment = None
 ):
     await interaction.response.defer(thinking=True, ephemeral=True)
     
-    if time < 5:
-        await interaction.followup.send("Time interval must be at least 5 seconds to prevent rate limits! ❌", ephemeral=True)
+    seconds = parse_time(time)
+    if seconds < 5:
+        await interaction.followup.send("Time interval must be at least 5 seconds (e.g. 5s, 1m, 1h) to prevent rate limits! ❌", ephemeral=True)
         return
 
-    channel = interaction.channel
-    file_to_send = None
+    # إذا كانت القناة تحتوي مسبقاً على رسالة تلقائية تعمل، قم بإيقافها أولاً
+    if channel.id in AUTOMESSAGE_TASKS:
+        AUTOMESSAGE_TASKS[channel.id].cancel()
 
+    file_to_send = None
     if attachment:
         try:
             file_to_send = await attachment.to_file()
@@ -398,13 +431,10 @@ async def automessage(
             await interaction.followup.send(f"Failed to process attachment: {e}", ephemeral=True)
             return
 
-    await interaction.followup.send(f"Automessage loop started in this channel every **{time}** seconds! 🔄", ephemeral=True)
-
     async def loop_task():
         global LAST_AUTOMESSAGE_ID
         while True:
             try:
-                # Delete the previous automatic message if it exists
                 if channel.id in LAST_AUTOMESSAGE_ID:
                     try:
                         old_msg = await channel.fetch_message(LAST_AUTOMESSAGE_ID[channel.id])
@@ -412,9 +442,7 @@ async def automessage(
                     except Exception:
                         pass
 
-                # Send the new message with or without attachment
                 if file_to_send:
-                    # Reset file pointer if sent multiple times
                     file_to_send.fp.seek(0)
                     new_msg = await channel.send(content=message, file=file_to_send)
                 else:
@@ -424,10 +452,74 @@ async def automessage(
             except Exception as e:
                 print(f"Error in automessage loop: {e}")
             
-            await asyncio.sleep(time)
+            await asyncio.sleep(seconds)
 
-    # Start the task in the background loop
-    bot.loop.create_task(loop_task())
+    task = bot.loop.create_task(loop_task())
+    AUTOMESSAGE_TASKS[channel.id] = task
+
+    await interaction.followup.send(f"Automessage loop started in {channel.mention} every **{time}** ({seconds} seconds)! 🔄", ephemeral=True)
+
+@bot.tree.command(name="stopautomessage", description="Stop the automated repeating message in a specific channel.")
+@commands.has_permissions(administrator=True)
+async def stopautomessage(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    
+    if channel.id in AUTOMESSAGE_TASKS:
+        AUTOMESSAGE_TASKS[channel.id].cancel()
+        del AUTOMESSAGE_TASKS[channel.id]
+        if channel.id in LAST_AUTOMESSAGE_ID:
+            del LAST_AUTOMESSAGE_ID[channel.id]
+        await interaction.followup.send(f"Automessage loop successfully stopped in {channel.mention}! 🛑", ephemeral=True)
+    else:
+        await interaction.followup.send(f"No active automessage loop found in {channel.mention}.", ephemeral=True)
+
+@bot.tree.command(name="embed", description="Send a customized embed message with optional color and image/gif.")
+@commands.has_permissions(administrator=True)
+async def embed(
+    interaction: discord.Interaction,
+    title: str,
+    description: str,
+    color: str = "5865F2",
+    image: str = None,
+    channel: discord.TextChannel = None
+):
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    target_channel = channel if channel else interaction.channel
+
+    try:
+        # معالجة اللون (سواء كان بصيغة Hex أو كود رقمي)
+        cleaned_color = color.strip().replace("#", "")
+        color_int = int(cleaned_color, 16)
+    except ValueError:
+        color_int = 0x5865F2
+
+    embed_msg = discord.Embed(
+        title=title,
+        description=description,
+        color=color_int
+    )
+
+    if image:
+        embed_msg.set_image(url=image)
+
+    try:
+        await target_channel.send(embed=embed_msg)
+        await interaction.followup.send(f"Embed sent successfully to {target_channel.mention}! ✅", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Failed to send embed: {e}", ephemeral=True)
+
+@bot.tree.command(name="lock", description="Lock the current text channel to prevent members from sending messages.")
+@commands.has_permissions(manage_channels=True)
+async def lock(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    target_channel = channel if channel else interaction.channel
+    guild = interaction.guild
+
+    try:
+        await target_channel.set_permissions(guild.default_role, send_messages=False, reason=f"Channel locked by {interaction.user}")
+        await interaction.followup.send(f"Successfully locked {target_channel.mention} 🔒", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Failed to lock channel: {e}", ephemeral=True)
 
 @bot.tree.command(name="setpunishment", description="Set punishment for security actions.")
 @commands.has_permissions(administrator=True)
