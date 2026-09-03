@@ -52,6 +52,9 @@ SERVER_BLACKLIST = []
 GLOBAL_TICKET_REASONS = ["buy vip:Buy VIP role here", "support:General assistance"]
 VERIFY_EMOJI_DATA = {}
 
+# Global variable to track the last sent automatic message per channel
+LAST_AUTOMESSAGE_ID = {}
+
 async def update_member_count_channel(guild):
     if MEMBER_COUNT_CHANNEL_ID == 0:
         return
@@ -371,20 +374,75 @@ async def on_message(message):
 
 # --- ALL COMMANDS ---
 
+@bot.tree.command(name="automessage", description="Send an automated repeating message with an optional attachment and time interval.")
+@commands.has_permissions(administrator=True)
+async def automessage(
+    interaction: discord.Interaction, 
+    message: str, 
+    time: int, 
+    attachment: discord.Attachment = None
+):
+    await interaction.response.defer(thinking=True, ephemeral=True)
+    
+    if time < 5:
+        await interaction.followup.send("Time interval must be at least 5 seconds to prevent rate limits! ❌", ephemeral=True)
+        return
+
+    channel = interaction.channel
+    file_to_send = None
+
+    if attachment:
+        try:
+            file_to_send = await attachment.to_file()
+        except Exception as e:
+            await interaction.followup.send(f"Failed to process attachment: {e}", ephemeral=True)
+            return
+
+    await interaction.followup.send(f"Automessage loop started in this channel every **{time}** seconds! 🔄", ephemeral=True)
+
+    async def loop_task():
+        global LAST_AUTOMESSAGE_ID
+        while True:
+            try:
+                # Delete the previous automatic message if it exists
+                if channel.id in LAST_AUTOMESSAGE_ID:
+                    try:
+                        old_msg = await channel.fetch_message(LAST_AUTOMESSAGE_ID[channel.id])
+                        await old_msg.delete()
+                    except Exception:
+                        pass
+
+                # Send the new message with or without attachment
+                if file_to_send:
+                    # Reset file pointer if sent multiple times
+                    file_to_send.fp.seek(0)
+                    new_msg = await channel.send(content=message, file=file_to_send)
+                else:
+                    new_msg = await channel.send(content=message)
+
+                LAST_AUTOMESSAGE_ID[channel.id] = new_msg.id
+            except Exception as e:
+                print(f"Error in automessage loop: {e}")
+            
+            await asyncio.sleep(time)
+
+    # Start the task in the background loop
+    bot.loop.create_task(loop_task())
+
 @bot.tree.command(name="setpunishment", description="Set punishment for security actions.")
 @commands.has_permissions(administrator=True)
 async def setpunishment(
     interaction: discord.Interaction, 
-    action: discord.app_commands.Choice[str], 
-    punishment: discord.app_commands.Choice[str], 
+    action: str, 
+    punishment: str, 
     channel: discord.TextChannel = None
 ):
     await interaction.response.defer(thinking=True, ephemeral=True)
     global SECURITY_PUNISHMENTS, PUNISHMENT_CHANNEL_ID
-    SECURITY_PUNISHMENTS[action.value] = punishment.value
+    SECURITY_PUNISHMENTS[action] = punishment
     if channel:
         PUNISHMENT_CHANNEL_ID = channel.id
-    await interaction.followup.send(f"Successfully set action **{action.name}** to punishment **{punishment.name}**! ✅", ephemeral=True)
+    await interaction.followup.send(f"Successfully set action **{action}** to punishment **{punishment}**! ✅", ephemeral=True)
 
 @setpunishment.autocomplete("action")
 async def setpunishment_action_autocomplete(interaction: discord.Interaction, current: str):
@@ -404,8 +462,8 @@ async def setpunishment_punishment_autocomplete(interaction: discord.Interaction
 @commands.has_permissions(administrator=True)
 async def status(
     interaction: discord.Interaction, 
-    activity_type: discord.app_commands.Choice[str] = None, 
-    status_type: discord.app_commands.Choice[str] = None, 
+    activity_type: str = None, 
+    status_type: str = None, 
     text: str = None
 ):
     await interaction.response.defer(thinking=True, ephemeral=True)
@@ -427,9 +485,9 @@ async def status(
         current_activity = bot.activity
         current_status = bot.status
         
-        new_act = act_mapping.get(activity_type.value, current_activity.type) if activity_type else (current_activity.type if current_activity else discord.ActivityType.playing)
+        new_act = act_mapping.get(activity_type, current_activity.type) if activity_type else (current_activity.type if current_activity else discord.ActivityType.playing)
         new_text = text if text else (current_activity.name if current_activity else "Active")
-        new_stat = stat_mapping.get(status_type.value, current_status) if status_type else current_status
+        new_stat = stat_mapping.get(status_type, current_status) if status_type else current_status
 
         await bot.change_presence(status=new_stat, activity=discord.Activity(type=new_act, name=new_text))
         await interaction.followup.send("Bot status updated successfully! ✅", ephemeral=True)
@@ -685,86 +743,15 @@ async def unban(interaction: discord.Interaction, target: str = "all"):
                     await interaction.guild.unban(user)
                     unbanned = True
                     await interaction.followup.send(f"Successfully unbanned **{user.name}**! ✅", ephemeral=True)
-                    break
             if not unbanned:
-                await interaction.followup.send("User not found in ban list!", ephemeral=True)
+                await interaction.followup.send("No banned member found matching that name or ID.", ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"Error unbanning: {e}", ephemeral=True)
+        await interaction.followup.send(f"Error unbanning member: {e}", ephemeral=True)
 
-@bot.tree.command(name="purge", description="Bulk delete messages in the chat.")
-@commands.has_permissions(manage_messages=True)
-async def purge(interaction: discord.Interaction, amount: int = 10):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        deleted = await interaction.channel.purge(limit=amount)
-        await interaction.followup.send(f"Successfully deleted {len(deleted)} messages! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error purging messages: {e}", ephemeral=True)
-
-@bot.tree.command(name="stats", description="Display general server and bot statistics.")
-async def stats(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    guild = interaction.guild
-    embed = discord.Embed(
-        title="📊 Server & Bot Statistics",
-        color=0x3498DB
-    )
-    embed.add_field(name="Server Name", value=guild.name, inline=True)
-    embed.add_field(name="Total Members", value=guild.member_count, inline=True)
-    embed.add_field(name="Total Guilds (Bot)", value=len(bot.guilds), inline=True)
-    await interaction.followup.send(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="sendhere", description="Send a message and files in the current channel.")
-@commands.has_permissions(administrator=True)
-async def sendhere(
-    interaction: discord.Interaction, 
-    message: str = "",
-    file1: discord.Attachment = None, file2: discord.Attachment = None, file3: discord.Attachment = None,
-    file4: discord.Attachment = None, file5: discord.Attachment = None, file6: discord.Attachment = None,
-    file7: discord.Attachment = None, file8: discord.Attachment = None, file9: discord.Attachment = None,
-    file10: discord.Attachment = None, file11: discord.Attachment = None, file12: discord.Attachment = None
-):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        attachments = [file1, file2, file3, file4, file5, file6, file7, file8, file9, file10, file11, file12]
-        files_to_send = []
-        for att in attachments:
-            if att:
-                file_obj = await att.to_file()
-                files_to_send.append(file_obj)
-        
-        final_message = message if message else None
-
-        if final_message and files_to_send:
-            await interaction.channel.send(content=final_message, files=files_to_send)
-        elif final_message:
-            await interaction.channel.send(content=final_message)
-        elif files_to_send:
-            await interaction.channel.send(files=files_to_send)
-        else:
-            await interaction.followup.send("Please provide a message or at least one file!", ephemeral=True)
-            return
-
-        await interaction.followup.send("Successfully sent!", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"An error occurred: {e}", ephemeral=True)
-
-@bot.tree.command(name="react", description="Add an emoji reaction to a specific message ID.")
-@commands.has_permissions(administrator=True)
-async def react(interaction: discord.Interaction, message_id: str, emoji: str):
-    await interaction.response.defer(thinking=True, ephemeral=True)
-    try:
-        msg = await interaction.channel.fetch_message(int(message_id))
-        await msg.add_reaction(emoji)
-        await interaction.followup.send("Reaction added successfully! ✅", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"Error: {e}", ephemeral=True)
-
-# --- STARTUP ---
+# --- START BOT & FLASK ---
 if __name__ == "__main__":
     keep_alive()
     TOKEN = os.environ.get("DISCORD_TOKEN")
-    if TOKEN:
-        bot.run(TOKEN)
-    else:
-        print("Error: DISCORD_TOKEN environment variable is missing!")
+    if not TOKEN:
+        TOKEN = "YOUR_BOT_TOKEN_HERE" 
+    bot.run(TOKEN)
