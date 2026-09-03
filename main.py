@@ -367,7 +367,7 @@ async def on_message(message):
         except Exception as e:
             print(f"Error adding reaction: {e}")
 
-    await bot.process_commands(message>
+    await bot.process_commands(message)
 
 # --- ALL COMMANDS ---
 
