@@ -25,13 +25,8 @@ DATA_FILE = Path(
     os.getenv("DATA_FILE", "bot_data.json")
 )
 
-FOREVER_VOICE_CHANNEL_ID = int(
-    os.getenv("FOREVER_VOICE_CHANNEL_ID", "1524066756514287837") or "0"
-)
-
-MEMBER_COUNT_CHANNEL_ID = int(
-    os.getenv("MEMBER_COUNT_CHANNEL_ID", "1544821289506574388") or "0"
-)
+FOREVER_VOICE_CHANNEL_ID = 1524066756514287837
+MEMBER_COUNT_CHANNEL_ID = 1544821289506574388
 
 TARGET_USER_ID = int(
     os.getenv("TARGET_USER_ID", "0") or "0"
@@ -69,10 +64,9 @@ def home():
 
 @app.route("/health")
 def health():
-    connected = bool(bot.is_ready()) if "bot" in globals() else False
     return {
-        "status": "ok" if connected else "starting",
-        "bot": "connected" if connected else "starting",
+        "status": "ok",
+        "bot": "running"
     }
 
 
@@ -2328,18 +2322,6 @@ bot = ProBot(
 
 
 # ============================================================
-# GLOBAL EVENT ERROR HANDLER
-# ============================================================
-
-@bot.event
-async def on_error(event_method, *args, **kwargs):
-    import traceback
-
-    print(f"[DISCORD EVENT ERROR] {event_method}")
-    traceback.print_exc()
-
-
-# ============================================================
 # READY
 # ============================================================
 
@@ -2368,8 +2350,11 @@ async def on_ready():
         "=================================================="
     )
 
-    # Re-apply presence after every Discord reconnect.
-    await apply_saved_presence()
+    if not READY_ONCE:
+
+        READY_ONCE = True
+
+        await apply_saved_presence()
 
     for guild in bot.guilds:
 
@@ -2875,21 +2860,6 @@ async def sendhere(
 
 
 # ============================================================
-# PREFIX COMMAND ERROR HANDLER
-# ============================================================
-
-@bot.event
-async def on_command_error(
-    ctx: commands.Context,
-    error: commands.CommandError,
-):
-    if isinstance(error, commands.CommandNotFound):
-        return
-
-    print(f"[PREFIX COMMAND ERROR] {repr(error)}")
-
-
-# ============================================================
 # GLOBAL ERROR HANDLER
 # ============================================================
 
@@ -2986,42 +2956,86 @@ def main():
 
         return
 
-    try:
+    # Discord/Cloudflare may temporarily return HTTP 429 (Error 1015)
+    # while the service IP is rate-limited.  Do not let a temporary
+    # rate-limit kill the Render process: wait and retry with backoff.
+    retry_delay = 30
+    max_retry_delay = 15 * 60
 
-        bot.run(
-            TOKEN,
-            log_handler=None,
-        )
+    while True:
+        try:
 
-    except discord.LoginFailure:
+            bot.run(
+                TOKEN,
+                log_handler=None,
+            )
 
-        print(
-            "[FATAL] Discord rejected the bot token."
-        )
+            # A normal shutdown should not be treated as a failure.
+            print("[SHUTDOWN] Discord bot stopped normally.")
+            break
 
-        print(
-            "[FATAL] Generate/copy a new bot token and "
-            "update DISCORD_TOKEN in Render."
-        )
+        except discord.LoginFailure:
 
-    except discord.PrivilegedIntentsRequired:
+            print(
+                "[FATAL] Discord rejected the bot token."
+            )
 
-        print(
-            "[FATAL] Discord requires privileged intents."
-        )
+            print(
+                "[FATAL] Generate/copy a new bot token and "
+                "update DISCORD_TOKEN in Render."
+            )
+            break
 
-        print(
-            "[FATAL] Enable Server Members Intent and "
-            "Message Content Intent in the Discord Developer Portal."
-        )
+        except discord.PrivilegedIntentsRequired:
 
-    except Exception as exc:
+            print(
+                "[FATAL] Discord requires privileged intents."
+            )
 
-        print(
-            f"[FATAL] Bot stopped: {repr(exc)}"
-        )
+            print(
+                "[FATAL] Enable Server Members Intent and "
+                "Message Content Intent in the Discord Developer Portal."
+            )
+            break
 
-        raise
+        except discord.HTTPException as exc:
+
+            if getattr(exc, "status", None) == 429:
+                retry_after = getattr(exc, "retry_after", None)
+                if not isinstance(retry_after, (int, float)) or retry_after <= 0:
+                    retry_after = retry_delay
+
+                # Keep the retry bounded so a bad/huge server value cannot
+                # accidentally sleep forever.
+                retry_after = min(max(float(retry_after), 5), max_retry_delay)
+
+                print(
+                    f"[RATE LIMIT] Discord returned HTTP 429. "
+                    f"Retrying in {retry_after:.0f}s..."
+                )
+
+                try:
+                    time.sleep(retry_after)
+                except KeyboardInterrupt:
+                    print("[SHUTDOWN] Interrupted while waiting to retry.")
+                    break
+
+                # Exponential backoff for repeated 429s.
+                retry_delay = min(retry_delay * 2, max_retry_delay)
+                continue
+
+            print(f"[FATAL] Discord HTTP error: {repr(exc)}")
+            break
+
+        except Exception as exc:
+
+            print(
+                f"[FATAL] Bot stopped: {repr(exc)}"
+            )
+            raise
+
+    return
+
 
 
 # ============================================================
