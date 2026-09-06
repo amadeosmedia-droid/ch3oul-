@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import time
+import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -2945,8 +2946,6 @@ def main():
             "[FATAL] Add DISCORD_TOKEN to Render Environment Variables."
         )
 
-        # Keep the web service alive instead of immediately
-        # killing the Render process.
         while True:
 
             try:
@@ -2957,9 +2956,13 @@ def main():
 
         return
 
-    # Discord/Cloudflare can temporarily return HTTP 429 while the
-    # service is starting. Keep the Render process alive and retry
-    # with exponential backoff instead of crashing the service.
+    # Discord/Cloudflare can temporarily return HTTP 429.
+    # IMPORTANT: discord.py closes its HTTP session when bot.run()
+    # exits after an exception. Reusing the same Bot instance then
+    # causes "RuntimeError: Session is closed".
+    #
+    # Therefore, after a 429 we wait and RESTART THE PROCESS so a
+    # completely fresh Bot/HTTP session is created on the next run.
     retry_delay = 30
     max_retry_delay = 15 * 60
 
@@ -2972,8 +2975,9 @@ def main():
                 log_handler=None,
             )
 
-            # A normal bot.run() return means the bot was closed cleanly.
-            print("[SHUTDOWN] Discord bot stopped cleanly.")
+            print(
+                "[SHUTDOWN] Discord bot stopped cleanly."
+            )
             return
 
         except discord.LoginFailure:
@@ -3003,39 +3007,63 @@ def main():
         except discord.HTTPException as exc:
 
             if getattr(exc, "status", None) != 429:
+
                 print(
                     f"[FATAL] Discord HTTP error: {repr(exc)}"
                 )
                 raise
 
-            # Prefer Discord's Retry-After header when present. Cloudflare
-            # 1015 pages may omit it, so fall back to exponential backoff.
+            # Prefer Discord's Retry-After header when present.
+            # Cloudflare 1015 pages often omit it, so use exponential
+            # backoff as a fallback.
             retry_after = None
+
             try:
-                header_value = exc.response.headers.get("Retry-After")
+
+                header_value = exc.response.headers.get(
+                    "Retry-After"
+                )
+
                 if header_value:
                     retry_after = float(header_value)
+
             except Exception:
                 retry_after = None
 
             if retry_after is None or retry_after <= 0:
                 retry_after = retry_delay
 
-            retry_after = min(max(retry_after, 1), max_retry_delay)
+            retry_after = min(
+                max(retry_after, 1),
+                max_retry_delay,
+            )
 
             print(
                 f"[RATE LIMIT] Discord returned HTTP 429. "
-                f"Retrying in {retry_after:.0f}s..."
+                f"Waiting {retry_after:.0f}s before restarting..."
             )
 
             try:
                 time.sleep(retry_after)
+
             except KeyboardInterrupt:
-                print("[SHUTDOWN] Interrupted while waiting to retry.")
+
+                print(
+                    "[SHUTDOWN] Interrupted while waiting to retry."
+                )
                 return
 
-            # Increase the fallback delay for repeated 429s, up to 15 minutes.
-            retry_delay = min(retry_delay * 2, max_retry_delay)
+            print(
+                "[RATE LIMIT] Restarting process with a fresh Discord session..."
+            )
+
+            # Replace this process with a fresh Python process. This
+            # recreates the Bot and aiohttp session, avoiding the
+            # "Session is closed" error from reusing the old bot.
+            os.execv(
+                sys.executable,
+                [sys.executable] + sys.argv,
+            )
 
         except Exception as exc:
 
