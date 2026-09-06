@@ -84,7 +84,6 @@ DEFAULT_DATA = {
         "panel_message_id": 0,
         "panel_channel_id": 0,
         "counter": 0,
-
         "reasons": [
             {
                 "label": "Buy VIP",
@@ -95,7 +94,6 @@ DEFAULT_DATA = {
                 "description": "General assistance",
             },
         ],
-
         "tickets": {},
     },
 
@@ -123,42 +121,32 @@ DEFAULT_DATA = {
     "antinuke": False,
     "antiraid": False,
     "deafen": True,
+
+    "rename_requests": {},
 }
 
 
-def deep_merge(
-    dst: dict,
-    src: dict,
-) -> None:
-
+def deep_merge(dst: dict, src: dict) -> None:
     if not isinstance(src, dict):
         return
 
     for key, value in src.items():
-
         if (
             isinstance(value, dict)
             and isinstance(dst.get(key), dict)
         ):
-            deep_merge(
-                dst[key],
-                value,
-            )
-
+            deep_merge(dst[key], value)
         else:
             dst[key] = value
 
 
 def load_data() -> dict:
-
     if not DATA_FILE.exists():
-
         return json.loads(
             json.dumps(DEFAULT_DATA)
         )
 
     try:
-
         raw = json.loads(
             DATA_FILE.read_text(
                 encoding="utf-8"
@@ -169,15 +157,11 @@ def load_data() -> dict:
             json.dumps(DEFAULT_DATA)
         )
 
-        deep_merge(
-            data,
-            raw,
-        )
+        deep_merge(data, raw)
 
         return data
 
     except Exception as exc:
-
         print(
             f"[DATA] Failed to load data: {exc}"
         )
@@ -191,13 +175,9 @@ DATA = load_data()
 
 
 def save_data() -> None:
-
-    temp = DATA_FILE.with_suffix(
-        ".tmp"
-    )
+    temp = DATA_FILE.with_suffix(".tmp")
 
     try:
-
         temp.write_text(
             json.dumps(
                 DATA,
@@ -207,12 +187,9 @@ def save_data() -> None:
             encoding="utf-8",
         )
 
-        temp.replace(
-            DATA_FILE
-        )
+        temp.replace(DATA_FILE)
 
     except Exception as exc:
-
         print(
             f"[DATA] Failed to save data: {exc}"
         )
@@ -280,16 +257,15 @@ def check_command(
 ) -> Optional[str]:
 
     if interaction.guild is None:
-
         return (
-            "This command can only be used inside a server."
+            "This command can only be used "
+            "inside a server."
         )
 
     if not has_user_permission(
         interaction,
         permission,
     ):
-
         return (
             f"You need `{permission.replace('_', ' ').title()}` "
             "permission."
@@ -311,45 +287,39 @@ def bot_can_act_on(
     action: str = "moderate",
 ) -> tuple[bool, str]:
 
-    me = get_bot_member(
-        guild
-    )
+    me = get_bot_member(guild)
 
     if me is None:
-
         return (
             False,
             "I cannot resolve my member object.",
         )
 
     if target.id == me.id:
-
         return (
             False,
             "I cannot act on myself.",
         )
 
     if target.id == guild.owner_id:
-
         return (
             False,
             "I cannot act on the server owner.",
         )
 
     if target.guild_permissions.administrator:
-
         return (
             False,
-            "For security, the bot will never moderate "
-            "a server administrator.",
+            "For security, the bot will never "
+            "moderate a server administrator.",
         )
 
     if target.top_role >= me.top_role:
-
         return (
             False,
-            "I cannot act on a member whose highest role is "
-            "equal to or higher than my highest role.",
+            "I cannot act on a member whose highest "
+            "role is equal to or higher than my "
+            "highest role.",
         )
 
     return True, ""
@@ -363,43 +333,37 @@ def bot_can_manage_role(
     me = guild.me
 
     if me is None:
-
         return (
             False,
             "I cannot resolve my member object.",
         )
 
     if role.is_default():
-
         return (
             False,
             "I cannot manage the @everyone role.",
         )
 
     if role.managed:
-
         return (
             False,
             "I cannot manage an integration-managed role.",
         )
 
     if role >= me.top_role:
-
         return (
             False,
-            "That role is equal to or higher than my highest role.",
+            "That role is equal to or higher than "
+            "my highest role.",
         )
 
     return True, ""
 
 
-def valid_hex(
-    value: str,
-) -> int:
+def valid_hex(value: str) -> int:
 
     cleaned = (
-        value
-        .strip()
+        value.strip()
         .replace("#", "")
     )
 
@@ -407,20 +371,15 @@ def valid_hex(
         r"[0-9a-fA-F]{6}",
         cleaned,
     ):
-
         raise ValueError(
-            "HEX must be 6 characters, for example #5865F2."
+            "HEX must be 6 characters, "
+            "for example #5865F2."
         )
 
-    return int(
-        cleaned,
-        16,
-    )
+    return int(cleaned, 16)
 
 
-def safe_channel_name(
-    name: str,
-) -> str:
+def safe_channel_name(name: str) -> str:
 
     name = re.sub(
         r"[^a-zA-Z0-9-]+",
@@ -594,14 +553,16 @@ async def update_member_count_channel(
 
             await channel.edit(
                 name=new_name,
-                reason="Updating member count stats.",
+                reason=(
+                    "Updating member count stats."
+                ),
             )
 
     except discord.Forbidden:
 
         print(
-            f"[COUNT] Missing permission to rename "
-            f"channel in {guild.name}."
+            f"[COUNT] Missing permission "
+            f"to rename channel in {guild.name}."
         )
 
     except Exception as exc:
@@ -658,8 +619,8 @@ async def ensure_forever_voice(
         )
 
         print(
-            f"[VOICE] Connected to {channel.name} "
-            f"in {guild.name}."
+            f"[VOICE] Connected to "
+            f"{channel.name} in {guild.name}."
         )
 
     except discord.ClientException:
@@ -668,8 +629,9 @@ async def ensure_forever_voice(
     except discord.Forbidden:
 
         print(
-            f"[VOICE] Missing permission to join "
-            f"{channel.name} in {guild.name}."
+            f"[VOICE] Missing permission "
+            f"to join {channel.name} "
+            f"in {guild.name}."
         )
 
     except Exception as exc:
@@ -740,7 +702,6 @@ async def apply_saved_presence() -> None:
             )
 
             if not stream_url:
-
                 stream_url = (
                     "https://twitch.tv/discord"
                 )
@@ -932,8 +893,8 @@ async def apply_message_punishment(
     except discord.Forbidden:
 
         print(
-            f"[MODERATION] Missing permission to punish "
-            f"{member}."
+            f"[MODERATION] Missing permission "
+            f"to punish {member}."
         )
 
     except Exception as exc:
@@ -1111,9 +1072,7 @@ class TicketControlView(
             ephemeral=True,
         )
 
-        await asyncio.sleep(
-            3
-        )
+        await asyncio.sleep(3)
 
         channel = interaction.channel
 
@@ -1244,7 +1203,11 @@ class TicketPanelSelect(
 
             existing = [
                 record
-                for record in DATA["ticket"]["tickets"].values()
+                for record in DATA[
+                    "ticket"
+                ][
+                    "tickets"
+                ].values()
                 if (
                     record.get("guild_id")
                     == guild.id
@@ -1256,9 +1219,13 @@ class TicketPanelSelect(
 
             if existing:
 
-                existing_channel = guild.get_channel(
-                    int(
-                        existing[0]["channel_id"]
+                existing_channel = (
+                    guild.get_channel(
+                        int(
+                            existing[0][
+                                "channel_id"
+                            ]
+                        )
                     )
                 )
 
@@ -1270,7 +1237,10 @@ class TicketPanelSelect(
 
                 return await send_error(
                     interaction,
-                    f"You already have an open ticket: {mention}",
+                    (
+                        "You already have an open ticket: "
+                        f"{mention}"
+                    ),
                 )
 
             await interaction.response.defer(
@@ -1368,8 +1338,10 @@ class TicketPanelSelect(
             number = DATA["ticket"]["counter"]
 
             channel_name = safe_channel_name(
-                f"ticket-{number}-"
-                f"{interaction.user.name}"
+                (
+                    f"ticket-{number}-"
+                    f"{interaction.user.name}"
+                )
             )
 
             try:
@@ -1498,7 +1470,10 @@ class TicketPanelSelect(
                 )
 
             await interaction.followup.send(
-                f"Ticket created: {channel.mention} ✅",
+                (
+                    f"Ticket created: "
+                    f"{channel.mention} ✅"
+                ),
                 ephemeral=True,
             )
 
@@ -1603,7 +1578,10 @@ async def close_ticket_channel(
             )
 
         new_name = safe_channel_name(
-            f"closed-{channel.name.replace('ticket-', '')}"
+            (
+                f"closed-"
+                f"{channel.name.replace('ticket-', '')}"
+            )
         )
 
         if category:
@@ -1741,7 +1719,10 @@ async def reopen_ticket_channel(
             )
 
         new_name = safe_channel_name(
-            f"ticket-{channel.name.replace('closed-', '')}"
+            (
+                f"ticket-"
+                f"{channel.name.replace('closed-', '')}"
+            )
         )
 
         if category:
@@ -2164,7 +2145,6 @@ class ProBot(
         self,
     ):
 
-        # Persistent ticket controls.
         self.add_view(
             TicketPanelView()
         )
@@ -2173,7 +2153,6 @@ class ProBot(
             TicketControlView()
         )
 
-        # Persistent nickname approval buttons.
         self.add_view(
             RenameApprovalView()
         )
@@ -2198,6 +2177,9 @@ bot = ProBot(
 async def on_ready():
 
     global READY_ONCE
+
+    if bot.user is None:
+        return
 
     print(
         f"[BOT] Logged in as "
@@ -2258,11 +2240,12 @@ async def on_voice_state_update(
     if member.id != bot.user.id:
         return
 
-    if before.channel and not after.channel:
+    if (
+        before.channel
+        and not after.channel
+    ):
 
-        await asyncio.sleep(
-            3
-        )
+        await asyncio.sleep(3)
 
         if DATA.get(
             "deafen",
@@ -2352,7 +2335,7 @@ async def on_member_remove(
 
 
 # ============================================================
-# MESSAGE SYSTEMS
+# BAD WORD FILTER
 # ============================================================
 
 def find_bad_word(
@@ -2365,9 +2348,7 @@ def find_bad_word(
 
     for word, reply_msg in bad_words.items():
 
-        word = str(
-            word
-        ).strip()
+        word = str(word).strip()
 
         if not word:
             continue
@@ -2386,13 +2367,15 @@ def find_bad_word(
 
             return (
                 word,
-                str(
-                    reply_msg or ""
-                ),
+                str(reply_msg or ""),
             )
 
     return None
 
+
+# ============================================================
+# MESSAGE SYSTEMS
+# ============================================================
 
 @bot.event
 async def on_message(
@@ -2550,9 +2533,11 @@ async def on_message(
                 color=0xF1C40F,
             )
 
-            sent_message = await message.channel.send(
-                embed=embed,
-                view=RenameApprovalView(),
+            sent_message = (
+                await message.channel.send(
+                    embed=embed,
+                    view=RenameApprovalView(),
+                )
             )
 
             save_rename_request(
@@ -2631,10 +2616,6 @@ async def on_message(
             print(
                 f"[REACTION] {exc}"
             )
-
-    # --------------------------------------------------------
-    # Slash/prefix command processing
-    # --------------------------------------------------------
 
     await bot.process_commands(
         message
@@ -2854,7 +2835,7 @@ async def handle_color_role(
 
 
 # ============================================================
-# SENDHERE
+# SENDHERE FILE SYSTEM
 # ============================================================
 
 async def collect_files(
@@ -2886,9 +2867,15 @@ async def collect_files(
     return files
 
 
+# ============================================================
+# SENDHERE COMMAND
+# ============================================================
+
 @bot.tree.command(
     name="sendhere",
-    description="Send a message with optional files here.",
+    description=(
+        "Send a message with optional files here."
+    ),
 )
 @app_commands.describe(
     message="Message to send.",
@@ -2902,10 +2889,6 @@ async def collect_files(
     file8="Optional file.",
     file9="Optional file.",
     file10="Optional file.",
-    file11="Optional file.",
-    file12="Optional file.",
-    file13="Optional file.",
-    file14="Optional file.",
 )
 async def sendhere(
     interaction: discord.Interaction,
@@ -2920,10 +2903,6 @@ async def sendhere(
     file8: Optional[discord.Attachment] = None,
     file9: Optional[discord.Attachment] = None,
     file10: Optional[discord.Attachment] = None,
-    file11: Optional[discord.Attachment] = None,
-    file12: Optional[discord.Attachment] = None,
-    file13: Optional[discord.Attachment] = None,
-    file14: Optional[discord.Attachment] = None,
 ):
 
     err = check_command(
@@ -2948,10 +2927,6 @@ async def sendhere(
         file8,
         file9,
         file10,
-        file11,
-        file12,
-        file13,
-        file14,
     ]
 
     if (
@@ -2961,21 +2936,36 @@ async def sendhere(
 
         return await send_error(
             interaction,
-            "You must provide either a message or at least one file to send.",
+            (
+                "You must provide either "
+                "a message or at least one "
+                "file to send."
+            ),
         )
 
-    await interaction.response.defer(
-        ephemeral=True
-    )
-
     try:
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
 
         files = await collect_files(
             *attachments
         )
 
+        if interaction.channel is None:
+
+            return await interaction.followup.send(
+                "Unable to resolve this channel.",
+                ephemeral=True,
+            )
+
         await interaction.channel.send(
-            content=message if message else None,
+            content=(
+                message
+                if message
+                else None
+            ),
             files=files,
         )
 
@@ -2988,8 +2978,9 @@ async def sendhere(
 
         await interaction.followup.send(
             (
-                "I don't have permission to send "
-                "messages or files in this channel."
+                "I don't have permission "
+                "to send messages/files "
+                "in this channel."
             ),
             ephemeral=True,
         )
@@ -3010,8 +3001,6 @@ async def sendhere(
 # START BOT
 # ============================================================
 
-keep_alive()
-
 TOKEN = os.environ.get(
     "DISCORD_TOKEN"
 )
@@ -3019,9 +3008,16 @@ TOKEN = os.environ.get(
 if not TOKEN:
 
     raise RuntimeError(
-        "DISCORD_TOKEN environment variable is not set."
+        "DISCORD_TOKEN environment variable "
+        "is not set."
     )
 
-bot.run(
-    TOKEN
-)
+
+keep_alive()
+
+
+if __name__ == "__main__":
+
+    bot.run(
+        TOKEN
+    )
