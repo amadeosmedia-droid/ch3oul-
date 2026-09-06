@@ -3,6 +3,7 @@ import json
 import os
 import re
 import threading
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -30,14 +31,22 @@ def run_flask() -> None:
 
 
 def keep_alive() -> None:
-    threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(
+        target=run_flask,
+        daemon=True,
+    ).start()
 
 
 # ============================================================
 # CONFIG / PERSISTENT DATA
 # ============================================================
 
-DATA_FILE = Path(os.environ.get("DATA_FILE", "bot_data.json"))
+DATA_FILE = Path(
+    os.environ.get(
+        "DATA_FILE",
+        "bot_data.json",
+    )
+)
 
 FOREVER_VOICE_CHANNEL_ID = 1524066756514287837
 MEMBER_COUNT_CHANNEL_ID = 1544821289506574388
@@ -75,6 +84,7 @@ DEFAULT_DATA = {
         "panel_message_id": 0,
         "panel_channel_id": 0,
         "counter": 0,
+
         "reasons": [
             {
                 "label": "Buy VIP",
@@ -85,6 +95,7 @@ DEFAULT_DATA = {
                 "description": "General assistance",
             },
         ],
+
         "tickets": {},
     },
 
@@ -115,43 +126,78 @@ DEFAULT_DATA = {
 }
 
 
-def deep_merge(dst: dict, src: dict) -> None:
+def deep_merge(
+    dst: dict,
+    src: dict,
+) -> None:
+
     if not isinstance(src, dict):
         return
 
     for key, value in src.items():
-        if isinstance(value, dict) and isinstance(dst.get(key), dict):
-            deep_merge(dst[key], value)
+
+        if (
+            isinstance(value, dict)
+            and isinstance(dst.get(key), dict)
+        ):
+            deep_merge(
+                dst[key],
+                value,
+            )
+
         else:
             dst[key] = value
 
 
 def load_data() -> dict:
-    if not DATA_FILE.exists():
-        return json.loads(json.dumps(DEFAULT_DATA))
 
-    try:
-        raw = json.loads(
-            DATA_FILE.read_text(encoding="utf-8")
+    if not DATA_FILE.exists():
+
+        return json.loads(
+            json.dumps(DEFAULT_DATA)
         )
 
-        data = json.loads(json.dumps(DEFAULT_DATA))
-        deep_merge(data, raw)
+    try:
+
+        raw = json.loads(
+            DATA_FILE.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        data = json.loads(
+            json.dumps(DEFAULT_DATA)
+        )
+
+        deep_merge(
+            data,
+            raw,
+        )
 
         return data
 
     except Exception as exc:
-        print(f"[DATA] Failed to load data: {exc}")
-        return json.loads(json.dumps(DEFAULT_DATA))
+
+        print(
+            f"[DATA] Failed to load data: {exc}"
+        )
+
+        return json.loads(
+            json.dumps(DEFAULT_DATA)
+        )
 
 
 DATA = load_data()
 
 
 def save_data() -> None:
-    temp = DATA_FILE.with_suffix(".tmp")
+
+    temp = DATA_FILE.with_suffix(
+        ".tmp"
+    )
 
     try:
+
         temp.write_text(
             json.dumps(
                 DATA,
@@ -161,10 +207,15 @@ def save_data() -> None:
             encoding="utf-8",
         )
 
-        temp.replace(DATA_FILE)
+        temp.replace(
+            DATA_FILE
+        )
 
     except Exception as exc:
-        print(f"[DATA] Failed to save data: {exc}")
+
+        print(
+            f"[DATA] Failed to save data: {exc}"
+        )
 
 
 # ============================================================
@@ -206,9 +257,13 @@ def has_user_permission(
     interaction: discord.Interaction,
     permission: str,
 ) -> bool:
+
     return (
         interaction.guild is not None
-        and isinstance(interaction.user, discord.Member)
+        and isinstance(
+            interaction.user,
+            discord.Member,
+        )
         and bool(
             getattr(
                 interaction.user.guild_permissions,
@@ -225,9 +280,16 @@ def check_command(
 ) -> Optional[str]:
 
     if interaction.guild is None:
-        return "This command can only be used inside a server."
 
-    if not has_user_permission(interaction, permission):
+        return (
+            "This command can only be used inside a server."
+        )
+
+    if not has_user_permission(
+        interaction,
+        permission,
+    ):
+
         return (
             f"You need `{permission.replace('_', ' ').title()}` "
             "permission."
@@ -239,6 +301,7 @@ def check_command(
 def get_bot_member(
     guild: discord.Guild,
 ) -> Optional[discord.Member]:
+
     return guild.me
 
 
@@ -248,18 +311,33 @@ def bot_can_act_on(
     action: str = "moderate",
 ) -> tuple[bool, str]:
 
-    me = get_bot_member(guild)
+    me = get_bot_member(
+        guild
+    )
 
     if me is None:
-        return False, "I cannot resolve my member object."
+
+        return (
+            False,
+            "I cannot resolve my member object.",
+        )
 
     if target.id == me.id:
-        return False, "I cannot act on myself."
+
+        return (
+            False,
+            "I cannot act on myself.",
+        )
 
     if target.id == guild.owner_id:
-        return False, "I cannot act on the server owner."
+
+        return (
+            False,
+            "I cannot act on the server owner.",
+        )
 
     if target.guild_permissions.administrator:
+
         return (
             False,
             "For security, the bot will never moderate "
@@ -267,6 +345,7 @@ def bot_can_act_on(
         )
 
     if target.top_role >= me.top_role:
+
         return (
             False,
             "I cannot act on a member whose highest role is "
@@ -284,15 +363,28 @@ def bot_can_manage_role(
     me = guild.me
 
     if me is None:
-        return False, "I cannot resolve my member object."
+
+        return (
+            False,
+            "I cannot resolve my member object.",
+        )
 
     if role.is_default():
-        return False, "I cannot manage the @everyone role."
+
+        return (
+            False,
+            "I cannot manage the @everyone role.",
+        )
 
     if role.managed:
-        return False, "I cannot manage an integration-managed role."
+
+        return (
+            False,
+            "I cannot manage an integration-managed role.",
+        )
 
     if role >= me.top_role:
+
         return (
             False,
             "That role is equal to or higher than my highest role.",
@@ -301,21 +393,35 @@ def bot_can_manage_role(
     return True, ""
 
 
-def valid_hex(value: str) -> int:
-    cleaned = value.strip().replace("#", "")
+def valid_hex(
+    value: str,
+) -> int:
+
+    cleaned = (
+        value
+        .strip()
+        .replace("#", "")
+    )
 
     if not re.fullmatch(
         r"[0-9a-fA-F]{6}",
         cleaned,
     ):
+
         raise ValueError(
             "HEX must be 6 characters, for example #5865F2."
         )
 
-    return int(cleaned, 16)
+    return int(
+        cleaned,
+        16,
+    )
 
 
-def safe_channel_name(name: str) -> str:
+def safe_channel_name(
+    name: str,
+) -> str:
+
     name = re.sub(
         r"[^a-zA-Z0-9-]+",
         "-",
@@ -324,7 +430,9 @@ def safe_channel_name(name: str) -> str:
 
     name = name.strip("-")
 
-    return (name or "ticket")[:90]
+    return (
+        name or "ticket"
+    )[:90]
 
 
 async def send_error(
@@ -333,19 +441,26 @@ async def send_error(
 ) -> None:
 
     try:
+
         if interaction.response.is_done():
+
             await interaction.followup.send(
                 text,
                 ephemeral=True,
             )
+
         else:
+
             await interaction.response.send_message(
                 text,
                 ephemeral=True,
             )
 
     except Exception as exc:
-        print(f"[INTERACTION ERROR] {exc}")
+
+        print(
+            f"[INTERACTION ERROR] {exc}"
+        )
 
 
 # ============================================================
@@ -360,19 +475,31 @@ async def security_log(
 ) -> None:
 
     channel_id = (
-        int(DATA.get("security_logs_channel", 0) or 0)
+        int(
+            DATA.get(
+                "security_logs_channel",
+                0,
+            )
+            or 0
+        )
         or SECURITY_LOGS_CHANNEL_ID
     )
 
     if not channel_id:
         return
 
-    channel = guild.get_channel(channel_id)
+    channel = guild.get_channel(
+        channel_id
+    )
 
-    if not isinstance(channel, discord.TextChannel):
+    if not isinstance(
+        channel,
+        discord.TextChannel,
+    ):
         return
 
     try:
+
         embed = discord.Embed(
             title=title,
             description=description,
@@ -380,10 +507,15 @@ async def security_log(
             timestamp=discord.utils.utcnow(),
         )
 
-        await channel.send(embed=embed)
+        await channel.send(
+            embed=embed
+        )
 
     except Exception as exc:
-        print(f"[SECURITY LOG] {exc}")
+
+        print(
+            f"[SECURITY LOG] {exc}"
+        )
 
 
 async def ticket_log(
@@ -394,18 +526,28 @@ async def ticket_log(
 ) -> None:
 
     channel_id = int(
-        DATA["ticket"].get("logs_channel", 0) or 0
+        DATA["ticket"].get(
+            "logs_channel",
+            0,
+        )
+        or 0
     )
 
     if not channel_id:
         return
 
-    channel = guild.get_channel(channel_id)
+    channel = guild.get_channel(
+        channel_id
+    )
 
-    if not isinstance(channel, discord.TextChannel):
+    if not isinstance(
+        channel,
+        discord.TextChannel,
+    ):
         return
 
     try:
+
         embed = discord.Embed(
             title=title,
             description=description,
@@ -413,10 +555,15 @@ async def ticket_log(
             timestamp=discord.utils.utcnow(),
         )
 
-        await channel.send(embed=embed)
+        await channel.send(
+            embed=embed
+        )
 
     except Exception as exc:
-        print(f"[TICKET LOG] {exc}")
+
+        print(
+            f"[TICKET LOG] {exc}"
+        )
 
 
 # ============================================================
@@ -431,26 +578,37 @@ async def update_member_count_channel(
         MEMBER_COUNT_CHANNEL_ID
     )
 
-    if not isinstance(channel, discord.VoiceChannel):
+    if not isinstance(
+        channel,
+        discord.VoiceChannel,
+    ):
         return
 
     try:
-        new_name = f"members: {guild.member_count}"
+
+        new_name = (
+            f"members: {guild.member_count}"
+        )
 
         if channel.name != new_name:
+
             await channel.edit(
                 name=new_name,
                 reason="Updating member count stats.",
             )
 
     except discord.Forbidden:
+
         print(
             f"[COUNT] Missing permission to rename "
             f"channel in {guild.name}."
         )
 
     except Exception as exc:
-        print(f"[COUNT] {exc}")
+
+        print(
+            f"[COUNT] {exc}"
+        )
 
 
 # ============================================================
@@ -461,25 +619,37 @@ async def ensure_forever_voice(
     guild: discord.Guild,
 ) -> None:
 
-    if not DATA.get("deafen", True):
+    if not DATA.get(
+        "deafen",
+        True,
+    ):
         return
 
     channel = guild.get_channel(
         FOREVER_VOICE_CHANNEL_ID
     )
 
-    if not isinstance(channel, discord.VoiceChannel):
+    if not isinstance(
+        channel,
+        discord.VoiceChannel,
+    ):
         return
 
     if guild.id in VOICE_LOCKS:
         return
 
-    VOICE_LOCKS.add(guild.id)
+    VOICE_LOCKS.add(
+        guild.id
+    )
 
     try:
+
         voice_client = guild.voice_client
 
-        if voice_client and voice_client.is_connected():
+        if (
+            voice_client
+            and voice_client.is_connected()
+        ):
             return
 
         await channel.connect(
@@ -496,16 +666,23 @@ async def ensure_forever_voice(
         pass
 
     except discord.Forbidden:
+
         print(
             f"[VOICE] Missing permission to join "
             f"{channel.name} in {guild.name}."
         )
 
     except Exception as exc:
-        print(f"[VOICE] {exc}")
+
+        print(
+            f"[VOICE] {exc}"
+        )
 
     finally:
-        VOICE_LOCKS.discard(guild.id)
+
+        VOICE_LOCKS.discard(
+            guild.id
+        )
 
 
 # ============================================================
@@ -515,7 +692,11 @@ async def ensure_forever_voice(
 async def apply_saved_presence() -> None:
 
     try:
-        st = DATA.get("status", {})
+
+        st = DATA.get(
+            "status",
+            {},
+        )
 
         status_map = {
             "online": discord.Status.online,
@@ -525,7 +706,10 @@ async def apply_saved_presence() -> None:
         }
 
         status = status_map.get(
-            st.get("status", "online"),
+            st.get(
+                "status",
+                "online",
+            ),
             discord.Status.online,
         )
 
@@ -551,10 +735,15 @@ async def apply_saved_presence() -> None:
 
         elif activity_type == "streaming":
 
-            stream_url = st.get("stream_url")
+            stream_url = st.get(
+                "stream_url"
+            )
 
             if not stream_url:
-                stream_url = "https://twitch.tv/discord"
+
+                stream_url = (
+                    "https://twitch.tv/discord"
+                )
 
             activity = discord.Streaming(
                 name=text,
@@ -581,7 +770,10 @@ async def apply_saved_presence() -> None:
         )
 
     except Exception as exc:
-        print(f"[PRESENCE] {exc}")
+
+        print(
+            f"[PRESENCE] {exc}"
+        )
 
 
 # ============================================================
@@ -591,7 +783,9 @@ async def apply_saved_presence() -> None:
 def action_category_allowed(
     guild: discord.Guild,
     action: str,
-    channel: Optional[discord.abc.GuildChannel] = None,
+    channel: Optional[
+        discord.abc.GuildChannel
+    ] = None,
 ) -> bool:
 
     categories = DATA.get(
@@ -602,15 +796,24 @@ def action_category_allowed(
     if not categories:
         return True
 
-    configured = categories.get(action)
+    configured = categories.get(
+        action
+    )
 
     if configured is None:
         return True
 
-    if isinstance(configured, bool):
+    if isinstance(
+        configured,
+        bool,
+    ):
         return configured
 
-    if isinstance(configured, list):
+    if isinstance(
+        configured,
+        list,
+    ):
+
         if channel is None:
             return True
 
@@ -638,7 +841,10 @@ async def apply_message_punishment(
 
     member = message.author
 
-    if not isinstance(member, discord.Member):
+    if not isinstance(
+        member,
+        discord.Member,
+    ):
         return
 
     can_act, reason = bot_can_act_on(
@@ -648,10 +854,12 @@ async def apply_message_punishment(
     )
 
     if not can_act:
+
         print(
             f"[MODERATION] Cannot punish "
             f"{member}: {reason}"
         )
+
         return
 
     try:
@@ -659,7 +867,9 @@ async def apply_message_punishment(
         if punishment == "timeout":
 
             await member.timeout(
-                timedelta(minutes=10),
+                timedelta(
+                    minutes=10
+                ),
                 reason="Bad word filter.",
             )
 
@@ -709,21 +919,25 @@ async def apply_message_punishment(
             "delete_message",
             "none",
         }:
+
             pass
 
         else:
+
             print(
                 f"[MODERATION] Unknown punishment: "
                 f"{punishment}"
             )
 
     except discord.Forbidden:
+
         print(
             f"[MODERATION] Missing permission to punish "
             f"{member}."
         )
 
     except Exception as exc:
+
         print(
             f"[MODERATION] Failed to punish "
             f"{member}: {exc}"
@@ -753,7 +967,9 @@ def staff_can_manage_ticket(
     ):
         return False
 
-    permissions = interaction.user.guild_permissions
+    permissions = (
+        interaction.user.guild_permissions
+    )
 
     return (
         permissions.manage_channels
@@ -775,7 +991,10 @@ async def ticket_is_manager(
     if not rec:
         return False
 
-    if interaction.user.id == rec.get("owner_id"):
+    if (
+        interaction.user.id
+        == rec.get("owner_id")
+    ):
         return True
 
     return staff_can_manage_ticket(
@@ -792,8 +1011,12 @@ def get_ticket_lock(
     )
 
     if lock is None:
+
         lock = asyncio.Lock()
-        TICKET_CREATION_LOCKS[guild_id] = lock
+
+        TICKET_CREATION_LOCKS[
+            guild_id
+        ] = lock
 
     return lock
 
@@ -807,6 +1030,7 @@ class TicketControlView(
 ):
 
     def __init__(self):
+
         super().__init__(
             timeout=None
         )
@@ -826,6 +1050,7 @@ class TicketControlView(
         if not await ticket_is_manager(
             interaction
         ):
+
             return await send_error(
                 interaction,
                 "You are not allowed to close this ticket.",
@@ -850,6 +1075,7 @@ class TicketControlView(
         if not await ticket_is_manager(
             interaction
         ):
+
             return await send_error(
                 interaction,
                 "You are not allowed to reopen this ticket.",
@@ -874,6 +1100,7 @@ class TicketControlView(
         if not staff_can_manage_ticket(
             interaction
         ):
+
             return await send_error(
                 interaction,
                 "Only ticket staff can delete tickets.",
@@ -884,7 +1111,9 @@ class TicketControlView(
             ephemeral=True,
         )
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(
+            3
+        )
 
         channel = interaction.channel
 
@@ -899,6 +1128,7 @@ class TicketControlView(
         save_data()
 
         try:
+
             await channel.delete(
                 reason=(
                     f"Ticket deleted by "
@@ -907,11 +1137,13 @@ class TicketControlView(
             )
 
         except discord.Forbidden:
+
             print(
                 "[TICKET DELETE] Missing permission."
             )
 
         except Exception as exc:
+
             print(
                 f"[TICKET DELETE] {exc}"
             )
@@ -986,6 +1218,7 @@ class TicketPanelSelect(
     ):
 
         if not interaction.guild:
+
             return await send_error(
                 interaction,
                 "This panel can only be used in a server.",
@@ -995,6 +1228,7 @@ class TicketPanelSelect(
             interaction.user,
             discord.Member,
         ):
+
             return await send_error(
                 interaction,
                 "Unable to resolve your member account.",
@@ -1052,7 +1286,9 @@ class TicketPanelSelect(
             )
 
             category = (
-                guild.get_channel(category_id)
+                guild.get_channel(
+                    category_id
+                )
                 if category_id
                 else None
             )
@@ -1101,7 +1337,9 @@ class TicketPanelSelect(
             )
 
             staff_role = (
-                guild.get_role(staff_role_id)
+                guild.get_role(
+                    staff_role_id
+                )
                 if staff_role_id
                 else None
             )
@@ -1274,6 +1512,7 @@ class TicketPanelView(
 ):
 
     def __init__(self):
+
         super().__init__(
             timeout=None
         )
@@ -1294,6 +1533,7 @@ async def close_ticket_channel(
     channel = interaction.channel
 
     if channel is None:
+
         return await send_error(
             interaction,
             "Unable to resolve this channel.",
@@ -1304,6 +1544,7 @@ async def close_ticket_channel(
     )
 
     if not rec:
+
         return await send_error(
             interaction,
             "This is not a registered ticket.",
@@ -1312,6 +1553,7 @@ async def close_ticket_channel(
     try:
 
         if not interaction.response.is_done():
+
             await interaction.response.defer(
                 ephemeral=True
             )
@@ -1335,9 +1577,12 @@ async def close_ticket_channel(
         else None
     )
 
-    if category is not None and not isinstance(
-        category,
-        discord.CategoryChannel,
+    if (
+        category is not None
+        and not isinstance(
+            category,
+            discord.CategoryChannel,
+        )
     ):
         category = None
 
@@ -1377,6 +1622,7 @@ async def close_ticket_channel(
             )
 
         rec["open"] = False
+
         rec["closed_at"] = (
             discord.utils.utcnow()
             .isoformat()
@@ -1435,6 +1681,7 @@ async def reopen_ticket_channel(
     channel = interaction.channel
 
     if channel is None:
+
         return await send_error(
             interaction,
             "Unable to resolve this channel.",
@@ -1445,6 +1692,7 @@ async def reopen_ticket_channel(
     )
 
     if not rec:
+
         return await send_error(
             interaction,
             "This is not a registered ticket.",
@@ -1470,9 +1718,12 @@ async def reopen_ticket_channel(
         else None
     )
 
-    if category is not None and not isinstance(
-        category,
-        discord.CategoryChannel,
+    if (
+        category is not None
+        and not isinstance(
+            category,
+            discord.CategoryChannel,
+        )
     ):
         category = None
 
@@ -1509,6 +1760,7 @@ async def reopen_ticket_channel(
             )
 
         rec["open"] = True
+
         rec["reopened_at"] = (
             discord.utils.utcnow()
             .isoformat()
@@ -1608,6 +1860,7 @@ class RenameApprovalView(
 ):
 
     def __init__(self):
+
         super().__init__(
             timeout=None
         )
@@ -1640,12 +1893,14 @@ class RenameApprovalView(
             interaction.user,
             discord.Member,
         ):
+
             return await send_error(
                 interaction,
                 "Unable to resolve your member account.",
             )
 
         if not interaction.user.guild_permissions.manage_nicknames:
+
             return await send_error(
                 interaction,
                 "You need Manage Nicknames.",
@@ -1656,12 +1911,14 @@ class RenameApprovalView(
         )
 
         if not request:
+
             return await send_error(
                 interaction,
                 "This nickname request no longer exists.",
             )
 
         if request.get("status") != "pending":
+
             return await send_error(
                 interaction,
                 "This nickname request has already been processed.",
@@ -1670,6 +1927,7 @@ class RenameApprovalView(
         guild = interaction.guild
 
         if guild is None:
+
             return await send_error(
                 interaction,
                 "This can only be used inside a server.",
@@ -1680,7 +1938,9 @@ class RenameApprovalView(
         )
 
         if member is None:
+
             request["status"] = "invalid"
+
             save_data()
 
             return await send_error(
@@ -1691,24 +1951,28 @@ class RenameApprovalView(
         me = guild.me
 
         if me is None:
+
             return await send_error(
                 interaction,
                 "I cannot resolve my member object.",
             )
 
         if member.id == guild.owner_id:
+
             return await send_error(
                 interaction,
                 "I cannot change the server owner's nickname.",
             )
 
         if member.id == me.id:
+
             return await send_error(
                 interaction,
                 "I cannot change my own nickname through this request.",
             )
 
         if member.top_role >= me.top_role:
+
             return await send_error(
                 interaction,
                 "I cannot change that member's nickname because their role is too high.",
@@ -1722,6 +1986,7 @@ class RenameApprovalView(
         ).strip()
 
         if len(nickname) > 32:
+
             return await send_error(
                 interaction,
                 "Nickname must be 32 characters or fewer.",
@@ -1738,9 +2003,11 @@ class RenameApprovalView(
             )
 
             request["status"] = "accepted"
+
             request["processed_by"] = (
                 interaction.user.id
             )
+
             request["processed_at"] = (
                 discord.utils.utcnow()
                 .isoformat()
@@ -1752,10 +2019,13 @@ class RenameApprovalView(
                 child.disabled = True
 
             try:
+
                 await interaction.message.edit(
                     view=self
                 )
+
             except Exception as exc:
+
                 print(
                     f"[RENAME VIEW] {exc}"
                 )
@@ -1814,12 +2084,14 @@ class RenameApprovalView(
             interaction.user,
             discord.Member,
         ):
+
             return await send_error(
                 interaction,
                 "Unable to resolve your member account.",
             )
 
         if not interaction.user.guild_permissions.manage_nicknames:
+
             return await send_error(
                 interaction,
                 "You need Manage Nicknames.",
@@ -1830,21 +2102,25 @@ class RenameApprovalView(
         )
 
         if not request:
+
             return await send_error(
                 interaction,
                 "This nickname request no longer exists.",
             )
 
         if request.get("status") != "pending":
+
             return await send_error(
                 interaction,
                 "This nickname request has already been processed.",
             )
 
         request["status"] = "rejected"
+
         request["processed_by"] = (
             interaction.user.id
         )
+
         request["processed_at"] = (
             discord.utils.utcnow()
             .isoformat()
@@ -1856,10 +2132,13 @@ class RenameApprovalView(
             child.disabled = True
 
         try:
+
             await interaction.message.edit(
                 view=self
             )
+
         except Exception as exc:
+
             print(
                 f"[RENAME VIEW] {exc}"
             )
@@ -1956,6 +2235,7 @@ async def on_ready():
             "deafen",
             True,
         ):
+
             await ensure_forever_voice(
                 guild
             )
@@ -1972,12 +2252,17 @@ async def on_voice_state_update(
     after: discord.VoiceState,
 ):
 
+    if bot.user is None:
+        return
+
     if member.id != bot.user.id:
         return
 
     if before.channel and not after.channel:
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(
+            3
+        )
 
         if DATA.get(
             "deafen",
@@ -2020,7 +2305,9 @@ async def on_member_join(
     welcome_text = DATA.get(
         "welcome",
         {}
-    ).get("text")
+    ).get(
+        "text"
+    )
 
     if welcome_text:
 
@@ -2038,7 +2325,9 @@ async def on_member_join(
 
         try:
 
-            await member.send(text)
+            await member.send(
+                text
+            )
 
         except Exception:
             pass
@@ -2076,12 +2365,13 @@ def find_bad_word(
 
     for word, reply_msg in bad_words.items():
 
-        word = str(word).strip()
+        word = str(
+            word
+        ).strip()
 
         if not word:
             continue
 
-        # Word-aware matching.
         pattern = (
             r"(?<!\w)"
             + re.escape(word)
@@ -2093,8 +2383,12 @@ def find_bad_word(
             content,
             flags=re.IGNORECASE,
         ):
-            return word, str(
-                reply_msg or ""
+
+            return (
+                word,
+                str(
+                    reply_msg or ""
+                ),
             )
 
     return None
@@ -2502,6 +2796,7 @@ async def handle_color_role(
                 )
 
                 if can_manage:
+
                     roles_to_remove.append(
                         role_obj
                     )
@@ -2602,10 +2897,131 @@ async def collect_files(
     file3="Optional file.",
     file4="Optional file.",
     file5="Optional file.",
-    file6="Optional file",
-    file7="Optional file",
-    file8="Optional file",
-    file9="Optional file",
-    file10="Optional file",
+    file6="Optional file.",
+    file7="Optional file.",
+    file8="Optional file.",
+    file9="Optional file.",
+    file10="Optional file.",
+    file11="Optional file.",
+    file12="Optional file.",
+    file13="Optional file.",
+    file14="Optional file.",
+)
+async def sendhere(
+    interaction: discord.Interaction,
+    message: str = "",
+    file1: Optional[discord.Attachment] = None,
+    file2: Optional[discord.Attachment] = None,
+    file3: Optional[discord.Attachment] = None,
+    file4: Optional[discord.Attachment] = None,
+    file5: Optional[discord.Attachment] = None,
+    file6: Optional[discord.Attachment] = None,
+    file7: Optional[discord.Attachment] = None,
+    file8: Optional[discord.Attachment] = None,
+    file9: Optional[discord.Attachment] = None,
+    file10: Optional[discord.Attachment] = None,
+    file11: Optional[discord.Attachment] = None,
+    file12: Optional[discord.Attachment] = None,
+    file13: Optional[discord.Attachment] = None,
+    file14: Optional[discord.Attachment] = None,
+):
+
+    err = check_command(
+        interaction,
+        "manage_messages",
+    )
+
+    if err:
+        return await send_error(
+            interaction,
+            err,
+        )
+
+    attachments = [
+        file1,
+        file2,
+        file3,
+        file4,
+        file5,
+        file6,
+        file7,
+        file8,
+        file9,
+        file10,
+        file11,
+        file12,
+        file13,
+        file14,
+    ]
+
+    if (
+        not message.strip()
+        and not any(attachments)
+    ):
+
+        return await send_error(
+            interaction,
+            "You must provide either a message or at least one file to send.",
+        )
+
+    await interaction.response.defer(
+        ephemeral=True
+    )
+
+    try:
+
+        files = await collect_files(
+            *attachments
+        )
+
+        await interaction.channel.send(
+            content=message if message else None,
+            files=files,
+        )
+
+        await interaction.followup.send(
+            "Message sent successfully! ✅",
+            ephemeral=True,
+        )
+
+    except discord.Forbidden:
+
+        await interaction.followup.send(
+            (
+                "I don't have permission to send "
+                "messages or files in this channel."
+            ),
+            ephemeral=True,
+        )
+
+    except Exception as exc:
+
+        print(
+            f"[SENDHERE] {exc}"
+        )
+
+        await interaction.followup.send(
+            f"Failed to send message: {exc}",
+            ephemeral=True,
+        )
+
+
+# ============================================================
+# START BOT
+# ============================================================
+
+keep_alive()
+
+TOKEN = os.environ.get(
+    "DISCORD_TOKEN"
 )
 
+if not TOKEN:
+
+    raise RuntimeError(
+        "DISCORD_TOKEN environment variable is not set."
+    )
+
+bot.run(
+    TOKEN
+)
