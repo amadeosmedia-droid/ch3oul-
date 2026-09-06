@@ -25,8 +25,13 @@ DATA_FILE = Path(
     os.getenv("DATA_FILE", "bot_data.json")
 )
 
-FOREVER_VOICE_CHANNEL_ID = 1524066756514287837
-MEMBER_COUNT_CHANNEL_ID = 1544821289506574388
+FOREVER_VOICE_CHANNEL_ID = int(
+    os.getenv("FOREVER_VOICE_CHANNEL_ID", "1524066756514287837") or "0"
+)
+
+MEMBER_COUNT_CHANNEL_ID = int(
+    os.getenv("MEMBER_COUNT_CHANNEL_ID", "1544821289506574388") or "0"
+)
 
 TARGET_USER_ID = int(
     os.getenv("TARGET_USER_ID", "0") or "0"
@@ -64,9 +69,10 @@ def home():
 
 @app.route("/health")
 def health():
+    connected = bool(bot.is_ready()) if "bot" in globals() else False
     return {
-        "status": "ok",
-        "bot": "running"
+        "status": "ok" if connected else "starting",
+        "bot": "connected" if connected else "starting",
     }
 
 
@@ -2322,6 +2328,18 @@ bot = ProBot(
 
 
 # ============================================================
+# GLOBAL EVENT ERROR HANDLER
+# ============================================================
+
+@bot.event
+async def on_error(event_method, *args, **kwargs):
+    import traceback
+
+    print(f"[DISCORD EVENT ERROR] {event_method}")
+    traceback.print_exc()
+
+
+# ============================================================
 # READY
 # ============================================================
 
@@ -2350,11 +2368,8 @@ async def on_ready():
         "=================================================="
     )
 
-    if not READY_ONCE:
-
-        READY_ONCE = True
-
-        await apply_saved_presence()
+    # Re-apply presence after every Discord reconnect.
+    await apply_saved_presence()
 
     for guild in bot.guilds:
 
@@ -2860,6 +2875,21 @@ async def sendhere(
 
 
 # ============================================================
+# PREFIX COMMAND ERROR HANDLER
+# ============================================================
+
+@bot.event
+async def on_command_error(
+    ctx: commands.Context,
+    error: commands.CommandError,
+):
+    if isinstance(error, commands.CommandNotFound):
+        return
+
+    print(f"[PREFIX COMMAND ERROR] {repr(error)}")
+
+
+# ============================================================
 # GLOBAL ERROR HANDLER
 # ============================================================
 
@@ -3000,3 +3030,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
