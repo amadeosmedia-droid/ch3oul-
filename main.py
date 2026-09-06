@@ -2602,4 +2602,10 @@ async def collect_files(
     file3="Optional file.",
     file4="Optional file.",
     file5="Optional file.",
-    file6="Optional file
+    file6="Optional file",
+    file7="Optional file",
+    file8="Optional file",
+    file9="Optional file",
+    file10="Optional file",
+
+
