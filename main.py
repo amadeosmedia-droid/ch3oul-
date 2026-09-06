@@ -3,6 +3,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -2956,13 +2957,14 @@ def main():
 
         return
 
-    # Discord/Cloudflare may temporarily return HTTP 429 (Error 1015)
-    # while the service IP is rate-limited.  Do not let a temporary
-    # rate-limit kill the Render process: wait and retry with backoff.
+    # Discord/Cloudflare can temporarily return HTTP 429 while the
+    # service is starting. Keep the Render process alive and retry
+    # with exponential backoff instead of crashing the service.
     retry_delay = 30
     max_retry_delay = 15 * 60
 
     while True:
+
         try:
 
             bot.run(
@@ -2970,9 +2972,9 @@ def main():
                 log_handler=None,
             )
 
-            # A normal shutdown should not be treated as a failure.
-            print("[SHUTDOWN] Discord bot stopped normally.")
-            break
+            # A normal bot.run() return means the bot was closed cleanly.
+            print("[SHUTDOWN] Discord bot stopped cleanly.")
+            return
 
         except discord.LoginFailure:
 
@@ -2984,7 +2986,7 @@ def main():
                 "[FATAL] Generate/copy a new bot token and "
                 "update DISCORD_TOKEN in Render."
             )
-            break
+            return
 
         except discord.PrivilegedIntentsRequired:
 
@@ -2996,46 +2998,52 @@ def main():
                 "[FATAL] Enable Server Members Intent and "
                 "Message Content Intent in the Discord Developer Portal."
             )
-            break
+            return
 
         except discord.HTTPException as exc:
 
-            if getattr(exc, "status", None) == 429:
-                retry_after = getattr(exc, "retry_after", None)
-                if not isinstance(retry_after, (int, float)) or retry_after <= 0:
-                    retry_after = retry_delay
-
-                # Keep the retry bounded so a bad/huge server value cannot
-                # accidentally sleep forever.
-                retry_after = min(max(float(retry_after), 5), max_retry_delay)
-
+            if getattr(exc, "status", None) != 429:
                 print(
-                    f"[RATE LIMIT] Discord returned HTTP 429. "
-                    f"Retrying in {retry_after:.0f}s..."
+                    f"[FATAL] Discord HTTP error: {repr(exc)}"
                 )
+                raise
 
-                try:
-                    time.sleep(retry_after)
-                except KeyboardInterrupt:
-                    print("[SHUTDOWN] Interrupted while waiting to retry.")
-                    break
+            # Prefer Discord's Retry-After header when present. Cloudflare
+            # 1015 pages may omit it, so fall back to exponential backoff.
+            retry_after = None
+            try:
+                header_value = exc.response.headers.get("Retry-After")
+                if header_value:
+                    retry_after = float(header_value)
+            except Exception:
+                retry_after = None
 
-                # Exponential backoff for repeated 429s.
-                retry_delay = min(retry_delay * 2, max_retry_delay)
-                continue
+            if retry_after is None or retry_after <= 0:
+                retry_after = retry_delay
 
-            print(f"[FATAL] Discord HTTP error: {repr(exc)}")
-            break
+            retry_after = min(max(retry_after, 1), max_retry_delay)
+
+            print(
+                f"[RATE LIMIT] Discord returned HTTP 429. "
+                f"Retrying in {retry_after:.0f}s..."
+            )
+
+            try:
+                time.sleep(retry_after)
+            except KeyboardInterrupt:
+                print("[SHUTDOWN] Interrupted while waiting to retry.")
+                return
+
+            # Increase the fallback delay for repeated 429s, up to 15 minutes.
+            retry_delay = min(retry_delay * 2, max_retry_delay)
 
         except Exception as exc:
 
             print(
                 f"[FATAL] Bot stopped: {repr(exc)}"
             )
+
             raise
-
-    return
-
 
 
 # ============================================================
