@@ -2,6 +2,8 @@ import asyncio
 import io
 import json
 import os
+import ctypes.util
+import traceback
 import re
 import threading
 import time
@@ -2848,6 +2850,139 @@ async def send_command_error(interaction, text):
     return await send_error(interaction, text)
 
 
+
+# -------------------- ROBUST VOICE HELPERS --------------------
+
+def ensure_opus_loaded():
+    """Load libopus explicitly on Linux/Render when available."""
+    if discord.opus.is_loaded():
+        return True, "already loaded"
+
+    candidates = [
+        os.getenv("OPUS_LIBRARY", "").strip(),
+        ctypes.util.find_library("opus") or "",
+        "libopus.so.0",
+        "libopus.so",
+    ]
+
+    tried = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if candidate in tried:
+            continue
+        tried.append(candidate)
+        try:
+            discord.opus.load_opus(candidate)
+            if discord.opus.is_loaded():
+                print(f"[VOICE] Opus loaded: {candidate}")
+                return True, candidate
+        except Exception as exc:
+            print(f"[VOICE] Could not load Opus from {candidate!r}: {type(exc).__name__}: {exc}")
+
+    return False, " / ".join(tried) or "no Opus library found"
+
+
+def voice_exception_details(exc: Exception) -> str:
+    """Return a useful, short diagnosis for Discord voice failures."""
+    if isinstance(exc, discord.Forbidden):
+        return "Discord denied the voice connection (check Connect/Speak permissions and channel overrides)."
+    if isinstance(exc, discord.ClientException):
+        return f"Discord voice client state error: {exc}"
+    if isinstance(exc, RuntimeError):
+        msg = str(exc).strip()
+        if msg:
+            return f"RuntimeError: {msg}"
+        return "RuntimeError (often PyNaCl/voice encryption or a broken voice client state)."
+    if isinstance(exc, discord.opus.OpusNotLoaded):
+        return "Opus is not loaded on the server. Install libopus/ffmpeg and load libopus.so.0."
+    msg = str(exc).strip()
+    return f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__
+
+
+async def connect_voice(channel: discord.VoiceChannel, *, self_deaf=True):
+    """Connect to a voice channel with cleanup/retry and full diagnostics."""
+    guild = channel.guild
+    me = guild.me
+
+    if me is None:
+        raise RuntimeError("Bot member is unavailable in this guild.")
+
+    perms = channel.permissions_for(me)
+    if not perms.connect:
+        raise discord.Forbidden(
+            discord.Object(id=0),
+            "Missing Connect permission for the selected voice channel.",
+        )
+
+    # Voice playback needs Speak. Joining/deafening alone does not, but
+    # requiring it here prevents /play from connecting and then failing later.
+    if not self_deaf and not perms.speak:
+        raise RuntimeError("Missing Speak permission for the selected voice channel.")
+
+    # /play uses Opus to encode PCM. Load it before creating a playback client.
+    opus_ok, opus_info = ensure_opus_loaded()
+    if not opus_ok:
+        print(f"[VOICE] Opus is unavailable: {opus_info}")
+
+    existing = guild.voice_client
+    if existing is not None:
+        try:
+            if existing.is_connected():
+                if existing.channel != channel:
+                    print(f"[VOICE] Moving existing connection to {channel.name}...")
+                    await existing.move_to(channel)
+                return existing
+        except Exception as exc:
+            print(f"[VOICE] Existing client unusable: {type(exc).__name__}: {exc}")
+            try:
+                await existing.disconnect(force=True)
+            except Exception:
+                pass
+
+    last_exc = None
+    for attempt in range(1, 4):
+        try:
+            print(
+                f"[VOICE] Connecting to {channel.name} "
+                f"(attempt {attempt}/3, self_deaf={self_deaf})..."
+            )
+            voice = await channel.connect(
+                timeout=30.0,
+                reconnect=True,
+                self_deaf=self_deaf,
+            )
+            print(
+                f"[VOICE] Connected to {channel.name} in {guild.name} "
+                f"(opus_loaded={discord.opus.is_loaded()})"
+            )
+            return voice
+        except Exception as exc:
+            last_exc = exc
+            print(
+                f"[VOICE ERROR] {guild.name} / #{channel.name} / "
+                f"attempt {attempt}: {voice_exception_details(exc)}"
+            )
+            traceback.print_exc()
+            stale = guild.voice_client
+            if stale is not None and not stale.is_connected():
+                try:
+                    await stale.disconnect(force=True)
+                except Exception:
+                    pass
+            if attempt < 3:
+                await asyncio.sleep(2 * attempt)
+
+    raise last_exc or RuntimeError("Voice connection failed.")
+
+
+async def start_music_idle_timer(guild_id: int, voice: discord.VoiceClient):
+    state = MUSIC_STATE.setdefault(guild_id, {})
+    old = state.get("idle_task")
+    if old and not old.done():
+        old.cancel()
+    state["idle_task"] = asyncio.create_task(music_leave_later(guild_id, voice))
+
 # -------------------- /JOINVC --------------------
 
 @bot.tree.command(name="joinvc", description="Make the bot join and stay in a voice channel.")
@@ -2861,16 +2996,24 @@ async def joinvc(interaction: discord.Interaction, channel: discord.VoiceChannel
         if old and old.channel != channel:
             await old.move_to(channel)
         elif not old or not old.is_connected():
-            await channel.connect(reconnect=True, self_deaf=DATA.get("deafen", True))
+            await connect_voice(channel, self_deaf=DATA.get("deafen", True))
         VOICE_TARGETS[interaction.guild.id] = channel.id
         DATA.setdefault("voice", {})[str(interaction.guild.id)] = channel.id
         save_data()
         await interaction.response.send_message(f"Joined {channel.mention} and will reconnect automatically. ✅", ephemeral=True)
     except discord.Forbidden:
-        await interaction.response.send_message("I need Connect and Speak permissions for that channel.", ephemeral=True)
+        print("[JOINVC] Forbidden: Discord denied the voice connection.")
+        await interaction.response.send_message(
+            "❌ I cannot connect to that voice channel. Check **Connect** permission and channel overrides.",
+            ephemeral=True,
+        )
     except Exception as exc:
-        print(f"[JOINVC] {exc}")
-        await interaction.response.send_message("Could not join that voice channel.", ephemeral=True)
+        print(f"[JOINVC] {voice_exception_details(exc)}")
+        traceback.print_exc()
+        await interaction.response.send_message(
+            f"❌ Could not join that voice channel: `{voice_exception_details(exc)}`",
+            ephemeral=True,
+        )
 
 
 # -------------------- /DEAFEN --------------------
@@ -3146,7 +3289,7 @@ async def ensure_saved_voice_channel(guild_id: int):
                 if voice.channel != channel:
                     await voice.move_to(channel)
             else:
-                await channel.connect(reconnect=True, self_deaf=DATA.get("deafen", True))
+                await connect_voice(channel, self_deaf=DATA.get("deafen", True))
         except Exception as exc:
             print(f"[VOICE SAVED] {exc}")
 
@@ -3156,32 +3299,93 @@ async def ensure_saved_voice_channel(guild_id: int):
 async def play(interaction: discord.Interaction, query: str):
     if interaction.guild is None or not isinstance(interaction.user, discord.Member):
         return await interaction.response.send_message("Use this command in a server.", ephemeral=True)
+
     if not interaction.user.voice or not interaction.user.voice.channel:
         return await interaction.response.send_message("Join a voice channel first.", ephemeral=True)
+
     await interaction.response.defer()
     channel = interaction.user.voice.channel
+
     try:
-        voice = interaction.guild.voice_client
-        if voice and voice.channel != channel:
-            await voice.move_to(channel)
-        elif not voice or not voice.is_connected():
-            voice = await channel.connect(reconnect=True, self_deaf=DATA.get("deafen", True))
+        # Load Opus before playback. This is separate from FFmpeg.
+        opus_ok, opus_info = ensure_opus_loaded()
+        if not opus_ok:
+            raise RuntimeError(
+                f"Opus library is not available on Render ({opus_info}). "
+                "Install libopus and PyNaCl."
+            )
+
+        me = interaction.guild.me
+        if me is None:
+            raise RuntimeError("Bot member is unavailable.")
+        channel_perms = channel.permissions_for(me)
+        if not channel_perms.connect:
+            raise RuntimeError("Missing Connect permission for the selected voice channel.")
+        if not channel_perms.speak:
+            raise RuntimeError("Missing Speak permission for the selected voice channel.")
+
+        voice = await connect_voice(channel, self_deaf=DATA.get("deafen", True))
+
         info = await extract_audio(query)
-        if voice.is_playing():
+
+        if voice.is_playing() or voice.is_paused():
             voice.stop()
-        source = discord.FFmpegPCMAudio(info["url"], before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
-        voice.play(source, after=lambda err: print(f"[MUSIC] playback ended: {err}") if err else None)
+
+        source = discord.FFmpegPCMAudio(
+            info["url"],
+            before_options=(
+                "-reconnect 1 "
+                "-reconnect_streamed 1 "
+                "-reconnect_delay_max 5 "
+                "-nostdin"
+            ),
+            options="-vn",
+        )
+
+        def playback_after(error):
+            if error:
+                print(f"[MUSIC AFTER] {type(error).__name__}: {error}")
+                traceback.print_exception(type(error), error, error.__traceback__)
+            else:
+                print("[MUSIC] Playback finished.")
+            # Schedule the 5-minute idle timer back on the bot loop.
+            try:
+                bot.loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(
+                        music_leave_later(interaction.guild.id, voice)
+                    )
+                )
+            except Exception as exc:
+                print(f"[MUSIC IDLE SCHEDULE] {exc}")
+
+        voice.play(source, after=playback_after)
+
         state = MUSIC_STATE.setdefault(interaction.guild.id, {})
         idle = state.get("idle_task")
         if idle and not idle.done():
             idle.cancel()
-        state.update({"voice": voice, "title": info["title"]})
-        await interaction.followup.send(f"▶️ Now playing **{info['title']}**")
+
+        state.update({
+            "voice": voice,
+            "title": info["title"],
+        })
+
+        await interaction.followup.send(
+            f"▶️ Now playing **{info['title']}**"
+        )
+
     except FileNotFoundError:
-        await interaction.followup.send("FFmpeg is not installed on the server. Add `ffmpeg` to Aptfile.")
+        print("[PLAY] FFmpeg executable was not found.")
+        traceback.print_exc()
+        await interaction.followup.send(
+            "❌ FFmpeg is not installed on the server. Add `ffmpeg` to Aptfile."
+        )
     except Exception as exc:
-        print(f"[PLAY] {exc}")
-        await interaction.followup.send(f"Could not play that track: `{type(exc).__name__}`")
+        print(f"[PLAY] {voice_exception_details(exc)}")
+        traceback.print_exc()
+        await interaction.followup.send(
+            f"❌ Could not play that track: `{voice_exception_details(exc)}`"
+        )
 
 
 # -------------------- /CREATESHORTCUT --------------------
@@ -3393,12 +3597,15 @@ async def on_message(message: discord.Message):
                     if voice and voice.channel != message.author.voice.channel:
                         await voice.move_to(message.author.voice.channel)
                     elif not voice or not voice.is_connected():
-                        voice = await message.author.voice.channel.connect(reconnect=True, self_deaf=DATA.get("deafen", True))
+                        voice = await connect_voice(message.author.voice.channel, self_deaf=DATA.get("deafen", True))
                     info = await extract_audio(query)
                     if voice.is_playing():
                         voice.stop()
-                    source = discord.FFmpegPCMAudio(info["url"], before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
-                    voice.play(source)
+                    opus_ok, opus_info = ensure_opus_loaded()
+                    if not opus_ok:
+                        raise RuntimeError(f"Opus library is not available ({opus_info}).")
+                    source = discord.FFmpegPCMAudio(info["url"], before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin", options="-vn")
+                    voice.play(source, after=lambda err: print(f"[SHORTCUT MUSIC] {err}") if err else print("[SHORTCUT MUSIC] Playback finished."))
                     state = MUSIC_STATE.setdefault(message.guild.id, {})
                     idle = state.get("idle_task")
                     if idle and not idle.done():
@@ -3612,6 +3819,20 @@ def main():
     # Cloudflare/Discord failures cannot make Render's health check time out.
     keep_alive()
 
+    # Voice dependency diagnostics. These do not contact Discord and are safe
+    # to run before login.
+    try:
+        import nacl  # noqa: F401
+        print("[VOICE CHECK] PyNaCl: OK")
+    except Exception as exc:
+        print(f"[VOICE CHECK] PyNaCl: MISSING/BROKEN: {type(exc).__name__}: {exc}")
+
+    opus_ok, opus_info = ensure_opus_loaded()
+    print(
+        f"[VOICE CHECK] Opus: {'OK' if opus_ok else 'MISSING'} "
+        f"({opus_info})"
+    )
+
     if not TOKEN:
         print(
             "[FATAL] DISCORD_TOKEN is not configured."
@@ -3737,4 +3958,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
