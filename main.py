@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import os
 import re
@@ -7,6 +8,8 @@ import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
+
+import aiohttp
 
 import discord
 from discord import app_commands
@@ -629,9 +632,9 @@ async def update_member_count_channel(
     guild: discord.Guild,
 ):
 
-    channel = guild.get_channel(
-        MEMBER_COUNT_CHANNEL_ID
-    )
+    saved_counter = DATA.get("member_count", {}).get(str(guild.id), 0)
+    channel_id = int(saved_counter or MEMBER_COUNT_CHANNEL_ID)
+    channel = guild.get_channel(channel_id)
 
     if not isinstance(
         channel,
@@ -642,7 +645,7 @@ async def update_member_count_channel(
     try:
 
         new_name = (
-            f"members: {guild.member_count}"
+            f"ᴍᴇᴍʙᴇʀꜱ: {guild.member_count}"
         )
 
         if channel.name != new_name:
@@ -2524,24 +2527,24 @@ async def on_member_join(
 
         text = (
             str(welcome_text)
-            .replace(
-                "{user}",
-                member.mention,
-            )
-            .replace(
-                "{server}",
-                member.guild.name,
-            )
+            .replace("{user}", member.mention)
+            .replace("{server}", member.guild.name)
         )
 
         try:
-
-            await member.send(
-                text
-            )
-
-        except Exception:
-            pass
+            channel_id = int(welcome.get("channel_id", 0) or 0)
+            channel = member.guild.get_channel(channel_id) if channel_id else None
+            target = channel if isinstance(channel, discord.TextChannel) else None
+            if target:
+                if welcome.get("attachment_url"):
+                    data = await fetch_attachment_bytes(welcome["attachment_url"])
+                    await target.send(text, file=discord.File(io.BytesIO(data), filename=welcome.get("attachment_name") or "welcome"))
+                else:
+                    await target.send(text)
+            else:
+                await member.send(text)
+        except Exception as exc:
+            print(f"[WELCOME] {exc}")
 
     try:
 
@@ -2796,6 +2799,618 @@ async def on_message(
         print(
             f"[MESSAGE EVENT] {exc}"
         )
+
+
+# ============================================================
+# EXTRA COMMANDS / AUTOMATION / MUSIC
+# ============================================================
+
+VOICE_TARGETS = {}
+MUSIC_STATE = {}
+AUTOMESSAGE_TASKS = {}
+SHORTCUTS = {}
+
+
+def parse_duration(value: str):
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smhdy])\s*", value.lower())
+    if not match:
+        raise ValueError("Duration must look like `10s`, `5m`, `2h`, `7d`, or `1y`.")
+    amount = float(match.group(1))
+    unit = match.group(2)
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "y": 31536000}
+    seconds = amount * multipliers[unit]
+    if seconds <= 0:
+        raise ValueError("Duration must be greater than zero.")
+    return seconds
+
+
+def format_duration(seconds: float):
+    if seconds % 31536000 == 0:
+        return f"{int(seconds / 31536000)}y"
+    if seconds % 86400 == 0:
+        return f"{int(seconds / 86400)}d"
+    if seconds % 3600 == 0:
+        return f"{int(seconds / 3600)}h"
+    if seconds % 60 == 0:
+        return f"{int(seconds / 60)}m"
+    return f"{int(seconds)}s"
+
+
+async def fetch_attachment_bytes(url: str):
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url) as response:
+            response.raise_for_status()
+            return await response.read()
+
+
+async def send_command_error(interaction, text):
+    return await send_error(interaction, text)
+
+
+# -------------------- /JOINVC --------------------
+
+@bot.tree.command(name="joinvc", description="Make the bot join and stay in a voice channel.")
+@app_commands.describe(channel="Voice channel to stay in.")
+async def joinvc(interaction: discord.Interaction, channel: discord.VoiceChannel):
+    error = check_command(interaction, "move_members")
+    if error:
+        return await send_command_error(interaction, error)
+    try:
+        old = interaction.guild.voice_client
+        if old and old.channel != channel:
+            await old.move_to(channel)
+        elif not old or not old.is_connected():
+            await channel.connect(reconnect=True, self_deaf=DATA.get("deafen", True))
+        VOICE_TARGETS[interaction.guild.id] = channel.id
+        DATA.setdefault("voice", {})[str(interaction.guild.id)] = channel.id
+        save_data()
+        await interaction.response.send_message(f"Joined {channel.mention} and will reconnect automatically. ✅", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("I need Connect and Speak permissions for that channel.", ephemeral=True)
+    except Exception as exc:
+        print(f"[JOINVC] {exc}")
+        await interaction.response.send_message("Could not join that voice channel.", ephemeral=True)
+
+
+# -------------------- /DEAFEN --------------------
+
+@bot.tree.command(name="deafen", description="Deafen the bot in its current voice channel.")
+async def deafen(interaction: discord.Interaction):
+    error = check_command(interaction, "move_members")
+    if error:
+        return await send_command_error(interaction, error)
+    voice = interaction.guild.voice_client
+    if not voice or not voice.is_connected():
+        return await interaction.response.send_message("I am not connected to a voice channel.", ephemeral=True)
+    try:
+        await voice.guild.change_voice_state(channel=voice.channel, self_deaf=True)
+        DATA["deafen"] = True
+        save_data()
+        await interaction.response.send_message("Bot deafened. 🔇", ephemeral=True)
+    except Exception as exc:
+        print(f"[DEAFEN] {exc}")
+        await interaction.response.send_message("Could not deafen the bot.", ephemeral=True)
+
+
+# -------------------- /UNBANALL --------------------
+
+@bot.tree.command(name="unbanall", description="Unban every banned member from this server.")
+async def unbanall(interaction: discord.Interaction):
+    error = check_command(interaction, "ban_members")
+    if error:
+        return await send_command_error(interaction, error)
+    await interaction.response.defer(ephemeral=True)
+    count = 0
+    try:
+        bans = [entry async for entry in interaction.guild.bans(limit=None)]
+        for entry in bans:
+            try:
+                await interaction.guild.unban(entry.user, reason=f"Unban all by {interaction.user}")
+                count += 1
+                await asyncio.sleep(0.25)
+            except discord.HTTPException as exc:
+                print(f"[UNBANALL] {entry.user}: {exc}")
+        await interaction.followup.send(f"Unbanned **{count}** member(s). ✅", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send("I need Ban Members permission.", ephemeral=True)
+    except Exception as exc:
+        print(f"[UNBANALL] {exc}")
+        await interaction.followup.send("Failed to read the server ban list.", ephemeral=True)
+
+
+# -------------------- /SETWELCOMEMESSAGE --------------------
+
+@bot.tree.command(name="setwelcomemessage", description="Set the welcome message and channel for new members.")
+@app_commands.describe(channel="Channel where the welcome message is sent.", message="Welcome message. Use {user} and {server} placeholders.", file="Optional welcome image/file.")
+async def setwelcomemessage(interaction: discord.Interaction, channel: discord.TextChannel, message: str, file: Optional[discord.Attachment] = None):
+    error = check_command(interaction, "manage_guild")
+    if error:
+        return await send_command_error(interaction, error)
+    DATA["welcome"] = {
+        "text": message,
+        "channel_id": channel.id,
+        "attachment_url": file.url if file else None,
+        "attachment_name": file.filename if file else None,
+    }
+    save_data()
+    await interaction.response.send_message(f"Welcome message enabled in {channel.mention}. ✅", ephemeral=True)
+
+
+# -------------------- /SENDDM --------------------
+
+@bot.tree.command(name="senddm", description="Send a DM to all members of this server.")
+@app_commands.describe(message="DM message to send.", include_bots="Whether bots should also receive the DM.")
+async def senddm(interaction: discord.Interaction, message: str, include_bots: bool = False):
+    error = check_command(interaction, "administrator")
+    if error:
+        return await send_command_error(interaction, error)
+    await interaction.response.defer(ephemeral=True)
+    sent = 0
+    failed = 0
+    for member in interaction.guild.members:
+        if member.bot and not include_bots:
+            continue
+        try:
+            await member.send(message)
+            sent += 1
+            await asyncio.sleep(1.0)
+        except Exception:
+            failed += 1
+    await interaction.followup.send(f"DM complete: **{sent}** sent, **{failed}** failed. ⚠️", ephemeral=True)
+
+
+# -------------------- /UNTIMEOUTALL --------------------
+
+@bot.tree.command(name="untimeoutall", description="Remove timeouts from all members who can be moderated.")
+async def untimeoutall(interaction: discord.Interaction):
+    error = check_command(interaction, "moderate_members")
+    if error:
+        return await send_command_error(interaction, error)
+    await interaction.response.defer(ephemeral=True)
+    count = 0
+    me = interaction.guild.me
+    for member in interaction.guild.members:
+        if member.is_timed_out() and me and member.id != me.id and member.top_role < me.top_role and member.id != interaction.guild.owner_id:
+            try:
+                await member.timeout(None, reason=f"Untimeout all by {interaction.user}")
+                count += 1
+                await asyncio.sleep(0.2)
+            except Exception:
+                pass
+    await interaction.followup.send(f"Removed timeouts from **{count}** member(s). ✅", ephemeral=True)
+
+
+# -------------------- BOOST MESSAGE --------------------
+
+@bot.tree.command(name="boostmessage", description="Enable or disable a server boost announcement.")
+@app_commands.describe(enabled="on or off.", channel="Channel for boost messages.")
+@app_commands.choices(enabled=[app_commands.Choice(name="on", value="on"), app_commands.Choice(name="off", value="off")])
+async def boostmessage(interaction: discord.Interaction, enabled: app_commands.Choice[str], channel: Optional[discord.TextChannel] = None):
+    error = check_command(interaction, "manage_guild")
+    if error:
+        return await send_command_error(interaction, error)
+    config = DATA.setdefault("boost", {})
+    if enabled.value == "off":
+        config[str(interaction.guild.id)] = {"enabled": False, "channel_id": 0}
+        save_data()
+        return await interaction.response.send_message("Boost messages disabled. ✅", ephemeral=True)
+    if channel is None:
+        return await interaction.response.send_message("Choose a channel when enabling boost messages.", ephemeral=True)
+    config[str(interaction.guild.id)] = {"enabled": True, "channel_id": channel.id}
+    save_data()
+    await interaction.response.send_message(f"Boost messages enabled in {channel.mention}. 🚀", ephemeral=True)
+
+
+# -------------------- /AUTOMESSAGE --------------------
+
+@bot.tree.command(name="automessage", description="Send a repeating message on a timer and delete each copy after 5 seconds.")
+@app_commands.describe(time="Interval such as 30s, 5m, or 1h.", message="Message to repeat.", file="Optional file to attach.")
+async def automessage(interaction: discord.Interaction, time: str, message: str, file: Optional[discord.Attachment] = None):
+    error = check_command(interaction, "manage_messages")
+    if error:
+        return await send_command_error(interaction, error)
+    try:
+        seconds = parse_duration(time)
+    except ValueError as exc:
+        return await interaction.response.send_message(str(exc), ephemeral=True)
+    if seconds < 5:
+        return await interaction.response.send_message("The minimum interval is 5 seconds.", ephemeral=True)
+    key = (interaction.guild.id, interaction.channel.id)
+    old = AUTOMESSAGE_TASKS.get(key)
+    if old:
+        old.cancel()
+    config = {"channel_id": interaction.channel.id, "guild_id": interaction.guild.id, "message": message, "attachment_url": file.url if file else None, "attachment_name": file.filename if file else None, "seconds": seconds}
+    DATA.setdefault("automessages", {})[str(key)] = config
+    save_data()
+    AUTOMESSAGE_TASKS[key] = asyncio.create_task(automessage_worker(config))
+    await interaction.response.send_message(f"Automessage started every **{format_duration(seconds)}**. Each copy is deleted after 5s. ✅", ephemeral=True)
+
+
+async def automessage_worker(config):
+    await asyncio.sleep(config["seconds"])
+    while True:
+        try:
+            channel = bot.get_channel(int(config["channel_id"]))
+            if not isinstance(channel, discord.TextChannel):
+                return
+            kwargs = {"content": config["message"] or None}
+            if config.get("attachment_url"):
+                data = await fetch_attachment_bytes(config["attachment_url"])
+                kwargs["file"] = discord.File(io.BytesIO(data), filename=config.get("attachment_name") or "file")
+            sent = await channel.send(**kwargs)
+            await asyncio.sleep(5)
+            try:
+                await sent.delete()
+            except Exception:
+                pass
+            await asyncio.sleep(config["seconds"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[AUTOMESSAGE] {exc}")
+            await asyncio.sleep(config["seconds"])
+
+
+# -------------------- /CREATEVCMEMBERS --------------------
+
+@bot.tree.command(name="createvcmembers", description="Create/update a voice channel showing the server member count.")
+async def createvcmembers(interaction: discord.Interaction):
+    error = check_command(interaction, "manage_channels")
+    if error:
+        return await send_command_error(interaction, error)
+    channel = interaction.guild.get_channel(MEMBER_COUNT_CHANNEL_ID)
+    try:
+        if not isinstance(channel, discord.VoiceChannel):
+            channel = await interaction.guild.create_voice_channel(f"ᴍᴇᴍʙᴇʀꜱ: {interaction.guild.member_count}", reason="Create member counter")
+            DATA.setdefault("member_count", {})[str(interaction.guild.id)] = channel.id
+            save_data()
+        await channel.edit(name=f"ᴍᴇᴍʙᴇʀꜱ: {interaction.guild.member_count}")
+        await interaction.response.send_message(f"Member counter ready: {channel.mention} ✅", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("I need Manage Channels permission.", ephemeral=True)
+    except Exception as exc:
+        print(f"[CREATEVCMEMBERS] {exc}")
+        await interaction.response.send_message("Could not create the member counter.", ephemeral=True)
+
+
+# -------------------- /EMBED --------------------
+
+@bot.tree.command(name="embed", description="Send a custom embed with an optional file/image.")
+@app_commands.describe(title="Embed title.", message="Embed description.", file="Optional image/gif/file.")
+async def embed_command(interaction: discord.Interaction, title: str, message: str, file: Optional[discord.Attachment] = None):
+    error = check_command(interaction, "manage_messages")
+    if error:
+        return await send_command_error(interaction, error)
+    try:
+        emb = discord.Embed(title=title, description=message, color=discord.Color.blurple(), timestamp=discord.utils.utcnow())
+        if file:
+            emb.set_image(url=f"attachment://{file.filename}")
+            await interaction.channel.send(embed=emb, file=await file.to_file())
+        else:
+            await interaction.channel.send(embed=emb)
+        await interaction.response.send_message("Embed sent. ✅", ephemeral=True)
+    except Exception as exc:
+        print(f"[EMBED] {exc}")
+        await interaction.response.send_message("Could not send the embed.", ephemeral=True)
+
+
+# -------------------- MUSIC --------------------
+
+async def extract_audio(query: str):
+    import yt_dlp
+    opts = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "default_search": "ytsearch1",
+        "source_address": "0.0.0.0",
+    }
+    def run_extract():
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(query, download=False)
+            if "entries" in info:
+                info = info["entries"][0]
+            return {"url": info["url"], "title": info.get("title", "Unknown"), "webpage_url": info.get("webpage_url", query)}
+    return await asyncio.to_thread(run_extract)
+
+
+async def music_leave_later(guild_id: int, voice: discord.VoiceClient):
+    state = MUSIC_STATE.get(guild_id)
+    if state:
+        state["idle_task"] = asyncio.current_task()
+    try:
+        await asyncio.sleep(300)
+        state = MUSIC_STATE.get(guild_id, {})
+        if state.get("voice") is voice and not voice.is_playing() and not voice.is_paused():
+            await voice.disconnect()
+            await asyncio.sleep(1)
+            await ensure_saved_voice_channel(guild_id)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(f"[MUSIC IDLE] {exc}")
+
+
+async def ensure_saved_voice_channel(guild_id: int):
+    target_id = VOICE_TARGETS.get(guild_id) or DATA.get("voice", {}).get(str(guild_id))
+    if not target_id:
+        return
+    guild = bot.get_guild(guild_id)
+    channel = guild.get_channel(int(target_id)) if guild else None
+    if isinstance(channel, discord.VoiceChannel):
+        try:
+            voice = guild.voice_client
+            if voice and voice.is_connected():
+                if voice.channel != channel:
+                    await voice.move_to(channel)
+            else:
+                await channel.connect(reconnect=True, self_deaf=DATA.get("deafen", True))
+        except Exception as exc:
+            print(f"[VOICE SAVED] {exc}")
+
+
+@bot.tree.command(name="play", description="Play music from YouTube/search in your current voice channel.")
+@app_commands.describe(query="Song name or URL.")
+async def play(interaction: discord.Interaction, query: str):
+    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        return await interaction.response.send_message("Use this command in a server.", ephemeral=True)
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        return await interaction.response.send_message("Join a voice channel first.", ephemeral=True)
+    await interaction.response.defer()
+    channel = interaction.user.voice.channel
+    try:
+        voice = interaction.guild.voice_client
+        if voice and voice.channel != channel:
+            await voice.move_to(channel)
+        elif not voice or not voice.is_connected():
+            voice = await channel.connect(reconnect=True, self_deaf=DATA.get("deafen", True))
+        info = await extract_audio(query)
+        if voice.is_playing():
+            voice.stop()
+        source = discord.FFmpegPCMAudio(info["url"], before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
+        voice.play(source, after=lambda err: print(f"[MUSIC] playback ended: {err}") if err else None)
+        state = MUSIC_STATE.setdefault(interaction.guild.id, {})
+        idle = state.get("idle_task")
+        if idle and not idle.done():
+            idle.cancel()
+        state.update({"voice": voice, "title": info["title"]})
+        await interaction.followup.send(f"▶️ Now playing **{info['title']}**")
+    except FileNotFoundError:
+        await interaction.followup.send("FFmpeg is not installed on the server. Add `ffmpeg` to Aptfile.")
+    except Exception as exc:
+        print(f"[PLAY] {exc}")
+        await interaction.followup.send(f"Could not play that track: `{type(exc).__name__}`")
+
+
+# -------------------- /CREATESHORTCUT --------------------
+
+@bot.tree.command(name="createshortcut", description="Create a text shortcut that triggers a bot command.")
+@app_commands.describe(command="Command name without the slash, e.g. play.", shortcut="Shortcut text, e.g. p.")
+async def createshortcut(interaction: discord.Interaction, command: str, shortcut: str):
+    error = check_command(interaction, "manage_guild")
+    if error:
+        return await send_command_error(interaction, error)
+    command = command.lower().lstrip("/")
+    shortcut = shortcut.strip().lower()
+    allowed = {c.name for c in bot.tree.get_commands()}
+    if command not in allowed:
+        return await interaction.response.send_message("That bot command does not exist.", ephemeral=True)
+    if not shortcut or len(shortcut) > 32 or " " in shortcut:
+        return await interaction.response.send_message("Shortcut must be 1-32 characters with no spaces.", ephemeral=True)
+    SHORTCUTS.setdefault(str(interaction.guild.id), {})[shortcut] = command
+    DATA.setdefault("shortcuts", {})[str(interaction.guild.id)] = SHORTCUTS[str(interaction.guild.id)]
+    save_data()
+    await interaction.response.send_message(f"Shortcut `{shortcut}` → `/{command}` created. Use `{shortcut}` in chat. ✅", ephemeral=True)
+
+
+# -------------------- /BAN --------------------
+
+@bot.tree.command(name="ban", description="Ban a member for a specified duration.")
+@app_commands.describe(member="Member to ban.", duration="Examples: 10m, 2h, 7d, 1y.", reason="Reason for the ban.")
+async def ban(interaction: discord.Interaction, member: discord.Member, duration: str, reason: str = "No reason provided"):
+    error = check_command(interaction, "ban_members")
+    if error:
+        return await send_command_error(interaction, error)
+    ok, why = bot_can_act_on(interaction.guild, member)
+    if not ok:
+        return await interaction.response.send_message(why, ephemeral=True)
+    try:
+        seconds = parse_duration(duration)
+    except ValueError as exc:
+        return await interaction.response.send_message(str(exc), ephemeral=True)
+    try:
+        await member.ban(reason=f"{reason} | Duration: {duration} | By: {interaction.user}")
+        await interaction.response.send_message(f"Banned {member.mention} for **{format_duration(seconds)}**. 🔨")
+        asyncio.create_task(temporary_unban(interaction.guild.id, member.id, seconds, reason))
+    except discord.Forbidden:
+        await interaction.response.send_message("I cannot ban that member. Check my role position and permissions.", ephemeral=True)
+    except Exception as exc:
+        print(f"[BAN] {exc}")
+        await interaction.response.send_message("Ban failed.", ephemeral=True)
+
+
+async def temporary_unban(guild_id: int, user_id: int, seconds: float, reason: str):
+    try:
+        await asyncio.sleep(seconds)
+        guild = bot.get_guild(guild_id)
+        if guild:
+            await guild.unban(discord.Object(id=user_id), reason=f"Temporary ban expired: {reason}")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(f"[TEMP UNBAN] {exc}")
+
+
+# -------------------- /TIMEOUT --------------------
+
+@bot.tree.command(name="timeout", description="Timeout a member for a specified duration.")
+@app_commands.describe(member="Member to timeout.", duration="Examples: 10s, 5m, 2h, 7d, 1y.", reason="Reason for the timeout.")
+async def timeout(interaction: discord.Interaction, member: discord.Member, duration: str, reason: str = "No reason provided"):
+    error = check_command(interaction, "moderate_members")
+    if error:
+        return await send_command_error(interaction, error)
+    ok, why = bot_can_act_on(interaction.guild, member)
+    if not ok:
+        return await interaction.response.send_message(why, ephemeral=True)
+    try:
+        seconds = parse_duration(duration)
+        if seconds > 28 * 86400:
+            return await interaction.response.send_message("Discord timeouts cannot exceed 28 days.", ephemeral=True)
+        await member.timeout(timedelta(seconds=seconds), reason=reason)
+        await interaction.response.send_message(f"Timed out {member.mention} for **{format_duration(seconds)}**. ⏱️")
+    except ValueError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("I cannot timeout that member.", ephemeral=True)
+    except Exception as exc:
+        print(f"[TIMEOUT] {exc}")
+        await interaction.response.send_message("Timeout failed.", ephemeral=True)
+
+
+# -------------------- /REACTTAG --------------------
+
+@bot.tree.command(name="reacttag", description="React to messages that directly mention you with a chosen emoji.")
+@app_commands.describe(emoji="Emoji to react with.", user="The user who must be directly mentioned.")
+async def reacttag(interaction: discord.Interaction, emoji: str, user: discord.Member):
+    error = check_command(interaction, "manage_guild")
+    if error:
+        return await send_command_error(interaction, error)
+    DATA.setdefault("reacttag", {})[str(interaction.guild.id)] = {"user_id": user.id, "emoji": emoji}
+    save_data()
+    await interaction.response.send_message(f"React-tag enabled for {user.mention} with {emoji}. It only reacts to direct @mentions. ✅", ephemeral=True)
+
+
+# -------------------- EXTRA MESSAGE HANDLERS --------------------
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    try:
+        if before.premium_since is None and after.premium_since is not None:
+            cfg = DATA.get("boost", {}).get(str(after.guild.id), {})
+            if cfg.get("enabled") and cfg.get("channel_id"):
+                channel = after.guild.get_channel(int(cfg["channel_id"]))
+                if isinstance(channel, discord.TextChannel):
+                    emb = discord.Embed(
+                        title="🚀 New Server Boost!",
+                        description=f"Thank you {after.mention} for boosting **{after.guild.name}**! 💜",
+                        color=0xF47FFF,
+                        timestamp=discord.utils.utcnow(),
+                    )
+                    if after.guild.icon:
+                        emb.set_thumbnail(url=after.guild.icon.url)
+                    if after.guild.banner:
+                        emb.set_image(url=after.guild.banner.url)
+                    boost_gif = os.getenv("BOOST_GIF_URL", "").strip()
+                    if boost_gif:
+                        emb.set_image(url=boost_gif)
+                    await channel.send(embed=emb)
+    except Exception as exc:
+        print(f"[BOOST] {exc}")
+
+
+# Load persisted shortcuts and voice targets once the bot is ready.
+async def restore_extra_state():
+    for guild_id, mapping in DATA.get("shortcuts", {}).items():
+        try:
+            SHORTCUTS[int(guild_id)] = dict(mapping)
+        except Exception:
+            pass
+    for guild_id, channel_id in DATA.get("voice", {}).items():
+        try:
+            VOICE_TARGETS[int(guild_id)] = int(channel_id)
+        except Exception:
+            pass
+
+
+# Extend on_ready behavior without replacing the existing handler.
+_original_ready = on_ready
+@bot.event
+async def on_ready():
+    await _original_ready()
+    await restore_extra_state()
+    # Recreate automessage workers after reconnect/startup.
+    for raw_key, config in DATA.get("automessages", {}).items():
+        try:
+            guild_id, channel_id = [int(x.strip("() ")) for x in raw_key.split(",")[:2]]
+            key = (guild_id, channel_id)
+            if key not in AUTOMESSAGE_TASKS or AUTOMESSAGE_TASKS[key].done():
+                AUTOMESSAGE_TASKS[key] = asyncio.create_task(automessage_worker(config))
+        except Exception:
+            pass
+    # Prefer the saved /joinvc target over the hard-coded legacy channel.
+    for guild in bot.guilds:
+        if guild.id in VOICE_TARGETS:
+            try:
+                await ensure_saved_voice_channel(guild.id)
+            except Exception as exc:
+                print(f"[VOICE RESTORE] {exc}")
+
+
+# Replace the original voice reconnect handler with one that supports /joinvc.
+_original_voice_state_update = on_voice_state_update
+@bot.event
+async def on_voice_state_update(member, before, after):
+    await _original_voice_state_update(member, before, after)
+    if bot.user is None or member.id != bot.user.id or after.channel is not None:
+        return
+    await asyncio.sleep(3)
+    try:
+        await ensure_saved_voice_channel(member.guild.id)
+    except Exception as exc:
+        print(f"[VOICE RECONNECT] {exc}")
+
+
+# React-tag and shortcut handling are intentionally kept in one extra event.
+_original_on_message = on_message
+@bot.event
+async def on_message(message: discord.Message):
+    await _original_on_message(message)
+    if message.author.bot or not message.guild:
+        return
+    try:
+        cfg = DATA.get("reacttag", {}).get(str(message.guild.id), {})
+        target_id = int(cfg.get("user_id", 0) or 0)
+        emoji = cfg.get("emoji")
+        if target_id and emoji and any(m.id == target_id for m in message.mentions) and not message.reference:
+            try:
+                await message.add_reaction(emoji)
+            except Exception as exc:
+                print(f"[REACTTAG] {exc}")
+        mapping = SHORTCUTS.get(message.guild.id, DATA.get("shortcuts", {}).get(str(message.guild.id), {}))
+        raw = message.content.strip()
+        parts = raw.split(maxsplit=1)
+        shortcut = parts[0].lower() if parts else ""
+        command_name = mapping.get(shortcut) if isinstance(mapping, dict) else None
+        if command_name == "play":
+            query = parts[1].strip() if len(parts) > 1 else ""
+            if not query:
+                await message.channel.send("Usage: `<shortcut> <song name or URL>`", delete_after=5)
+            elif isinstance(message.author, discord.Member) and message.author.voice and message.author.voice.channel:
+                try:
+                    voice = message.guild.voice_client
+                    if voice and voice.channel != message.author.voice.channel:
+                        await voice.move_to(message.author.voice.channel)
+                    elif not voice or not voice.is_connected():
+                        voice = await message.author.voice.channel.connect(reconnect=True, self_deaf=DATA.get("deafen", True))
+                    info = await extract_audio(query)
+                    if voice.is_playing():
+                        voice.stop()
+                    source = discord.FFmpegPCMAudio(info["url"], before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5", options="-vn")
+                    voice.play(source)
+                    state = MUSIC_STATE.setdefault(message.guild.id, {})
+                    idle = state.get("idle_task")
+                    if idle and not idle.done():
+                        idle.cancel()
+                    state.update({"voice": voice, "title": info["title"]})
+                    await message.channel.send(f"▶️ Now playing **{info['title']}**", delete_after=8)
+                except Exception as exc:
+                    print(f"[SHORTCUT PLAY] {exc}")
+        elif command_name:
+            await message.channel.send(f"Shortcut `{shortcut}` is linked to `/{command_name}`. Add the command arguments after the shortcut.", delete_after=5)
+    except Exception as exc:
+        print(f"[EXTRA MESSAGE] {exc}")
 
 
 # ============================================================
