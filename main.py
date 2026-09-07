@@ -4,7 +4,6 @@ import os
 import re
 import threading
 import time
-import sys
 from datetime import timedelta
 from pathlib import Path
 from typing import Optional
@@ -13,6 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
+from werkzeug.serving import make_server
 
 
 # ============================================================
@@ -58,39 +58,99 @@ SECURITY_LOGS_CHANNEL_ID = int(
 
 app = Flask(__name__)
 
+# Keep one HTTP server object for the whole process. This is important on
+# Render: replacing the Python process with os.execv() would inherit the
+# listening socket and can cause "Address already in use". We therefore
+# never exec() the process; on a Discord 429 we let Render restart it.
+http_server = None
+http_server_lock = threading.Lock()
+flask_thread = None
+
 
 @app.route("/")
 def home():
-    return "Discord bot is alive! ✅"
+    return "Discord bot is alive! ✅", 200
 
 
 @app.route("/health")
 def health():
     return {
         "status": "ok",
-        "bot": "running"
-    }
+        "bot": "running",
+    }, 200
 
 
 def run_flask():
+    global http_server
+
     try:
-        app.run(
-            host="0.0.0.0",
-            port=PORT,
-            debug=False,
-            use_reloader=False,
+        server = make_server(
+            "0.0.0.0",
+            PORT,
+            app,
+            threaded=True,
         )
+
+        with http_server_lock:
+            http_server = server
+
+        print(
+            f"[HEALTH] HTTP server listening on 0.0.0.0:{PORT}"
+        )
+
+        server.serve_forever()
+
+    except OSError as exc:
+        print(
+            f"[FLASK FATAL] Could not bind port {PORT}: {exc}"
+        )
+        # A second server on the same Render instance is never expected.
+        # Do not silently continue with a dead health endpoint.
+        raise
+
     except Exception as exc:
-        print(f"[FLASK] {exc}")
+        print(
+            f"[FLASK FATAL] {repr(exc)}"
+        )
+        raise
+
+    finally:
+        with http_server_lock:
+            http_server = None
 
 
 def keep_alive():
-    thread = threading.Thread(
+    global flask_thread
+
+    if flask_thread is not None and flask_thread.is_alive():
+        print("[HEALTH] HTTP server already running; not starting another one.")
+        return flask_thread
+
+    flask_thread = threading.Thread(
         target=run_flask,
         daemon=True,
         name="FlaskThread",
     )
-    thread.start()
+    flask_thread.start()
+
+    # Give the HTTP server a short moment to bind before Discord login.
+    # This prevents Render from seeing a dead port during startup.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with http_server_lock:
+            if http_server is not None:
+                return flask_thread
+
+        if not flask_thread.is_alive():
+            raise RuntimeError(
+                f"Health server failed to start on port {PORT}."
+            )
+
+        time.sleep(0.05)
+
+    raise RuntimeError(
+        f"Health server did not bind to port {PORT} within 10 seconds."
+    )
 
 
 # ============================================================
@@ -2932,43 +2992,41 @@ def main():
         "=================================================="
     )
 
-    # Start Render web server regardless of Discord
-    # connection state.
+    # Start the Render health endpoint exactly once.
+    # The HTTP server is intentionally independent from Discord login so
+    # Cloudflare/Discord failures cannot make Render's health check time out.
     keep_alive()
 
     if not TOKEN:
-
         print(
             "[FATAL] DISCORD_TOKEN is not configured."
         )
-
         print(
             "[FATAL] Add DISCORD_TOKEN to Render Environment Variables."
         )
 
         while True:
-
             try:
                 threading.Event().wait(60)
-
             except KeyboardInterrupt:
-                break
+                print("[SHUTDOWN] Interrupted.")
+                return
 
-        return
-
-    # Discord/Cloudflare can temporarily return HTTP 429.
-    # IMPORTANT: discord.py closes its HTTP session when bot.run()
-    # exits after an exception. Reusing the same Bot instance then
-    # causes "RuntimeError: Session is closed".
+    # discord.py closes its aiohttp session when bot.run() exits after an
+    # exception. Reusing the same Bot object causes "Session is closed".
+    # We also must NOT use os.execv() here: execv preserves open file
+    # descriptors, including the Flask listening socket, which can lead to
+    # Render reporting "Address already in use".
     #
-    # Therefore, after a 429 we wait and RESTART THE PROCESS so a
-    # completely fresh Bot/HTTP session is created on the next run.
-    retry_delay = 30
+    # On a 429 we wait, then terminate this process. Render will start a
+    # completely fresh Python process, which creates a fresh Bot/session and
+    # releases the old port cleanly.
+    fallback_retry_delay = 15 * 60
     max_retry_delay = 15 * 60
 
     while True:
-
         try:
+            print("[DISCORD] Connecting to Discord...")
 
             bot.run(
                 TOKEN,
@@ -2981,11 +3039,9 @@ def main():
             return
 
         except discord.LoginFailure:
-
             print(
                 "[FATAL] Discord rejected the bot token."
             )
-
             print(
                 "[FATAL] Generate/copy a new bot token and "
                 "update DISCORD_TOKEN in Render."
@@ -2993,11 +3049,9 @@ def main():
             return
 
         except discord.PrivilegedIntentsRequired:
-
             print(
                 "[FATAL] Discord requires privileged intents."
             )
-
             print(
                 "[FATAL] Enable Server Members Intent and "
                 "Message Content Intent in the Discord Developer Portal."
@@ -3005,33 +3059,28 @@ def main():
             return
 
         except discord.HTTPException as exc:
-
             if getattr(exc, "status", None) != 429:
-
                 print(
                     f"[FATAL] Discord HTTP error: {repr(exc)}"
                 )
                 raise
 
-            # Prefer Discord's Retry-After header when present.
-            # Cloudflare 1015 pages often omit it, so use exponential
-            # backoff as a fallback.
+            # Prefer Discord's Retry-After header when it exists.
             retry_after = None
-
             try:
-
-                header_value = exc.response.headers.get(
-                    "Retry-After"
-                )
-
+                response = getattr(exc, "response", None)
+                headers = getattr(response, "headers", {})
+                header_value = headers.get("Retry-After")
                 if header_value:
                     retry_after = float(header_value)
-
             except Exception:
                 retry_after = None
 
+            # Cloudflare Error 1015 pages often have no Retry-After header.
+            # Use a conservative 15-minute delay rather than hammering the
+            # same Render/Cloudflare IP repeatedly.
             if retry_after is None or retry_after <= 0:
-                retry_after = retry_delay
+                retry_after = fallback_retry_delay
 
             retry_after = min(
                 max(retry_after, 1),
@@ -3039,38 +3088,31 @@ def main():
             )
 
             print(
-                f"[RATE LIMIT] Discord returned HTTP 429. "
-                f"Waiting {retry_after:.0f}s before restarting..."
+                "[RATE LIMIT] Discord returned HTTP 429. "
+                f"Waiting {retry_after:.0f}s before Render restart..."
             )
 
             try:
                 time.sleep(retry_after)
-
             except KeyboardInterrupt:
-
                 print(
                     "[SHUTDOWN] Interrupted while waiting to retry."
                 )
                 return
 
             print(
-                "[RATE LIMIT] Restarting process with a fresh Discord session..."
+                "[RATE LIMIT] Exiting cleanly so Render can start a "
+                "fresh process/session..."
             )
 
-            # Replace this process with a fresh Python process. This
-            # recreates the Bot and aiohttp session, avoiding the
-            # "Session is closed" error from reusing the old bot.
-            os.execv(
-                sys.executable,
-                [sys.executable] + sys.argv,
-            )
+            # Do NOT os.execv(). A new process must be created by Render so
+            # the old listening socket on PORT is fully released.
+            os._exit(75)
 
         except Exception as exc:
-
             print(
                 f"[FATAL] Bot stopped: {repr(exc)}"
             )
-
             raise
 
 
